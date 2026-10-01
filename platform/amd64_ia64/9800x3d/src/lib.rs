@@ -65,6 +65,8 @@ use generic_operations::{Engine, Kernels, Operations};
 struct Zen5;
 
 impl Kernels for Zen5 {
+    const ENCODE_BRANCHLESS: bool = true;
+
     #[inline(always)]
     fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {
         use core::arch::x86_64::*;

@@ -1,6 +1,6 @@
 //! Every algorithm, written once over a [`Kernels`] type and monomorphized inside each tier
 //! crate with that crate's target flags.
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![feature(portable_simd)]
 #![feature(core_intrinsics)]
 #![allow(
@@ -16,6 +16,7 @@ pub mod codebook;
 pub mod crc;
 pub mod format;
 mod planes;
+pub mod rans;
 
 pub use format::{Format, plane_len};
 
@@ -23,6 +24,10 @@ pub use format::{Format, plane_len};
 /// Every method has a portable `core::simd` default. A tier overrides a method only where an
 /// intrinsic beats the default's codegen on that tier.
 pub trait Kernels: 'static {
+    /// Encode renormalization without a data-dependent branch. Output is identical either way;
+    /// which is faster depends on the tier (see docs/codegen-parity.md).
+    const ENCODE_BRANCHLESS: bool = false;
+
     /// `out = a ^ b` over one 64-byte block.
     #[inline(always)]
     fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {
@@ -78,6 +83,18 @@ pub trait Operations: Sync + 'static {
     /// Add the joint (exponent, high residual) counts of one chunk to `joint`, indexed
     /// `exp << 8 | hi`. The caller keeps a chunk below 2^32 elements and sums chunks in `u64`.
     fn histogram(&self, exps: &[u8], his: &[u8], joint: &mut [u32; 65536]) -> Result<(), OpError>;
+
+    /// rANS-encode one chunk's exponent symbols (and coded sign|mantissa symbols), writing per
+    /// way the exponent words, sign|mantissa words and escape bytes. `scratch` needs
+    /// [`rans::encode_scratch_len`] words and `out` at most [`rans::encode_bound`] bytes.
+    fn encode_chunk(
+        &self,
+        tables: &rans::EncTables,
+        exps: &[u8],
+        his: &[u8],
+        scratch: &mut [u16],
+        out: &mut [u8],
+    ) -> Result<rans::ChunkInfo, OpError>;
 }
 
 /// Errors returned by [`Operations`] methods.
@@ -130,6 +147,18 @@ impl<K: Kernels> Operations for Engine<K> {
         los: &mut [u8],
     ) -> Result<(), OpError> {
         planes::split_planes::<K>(fmt, bytes, exps, his, los)
+    }
+
+    #[inline(never)]
+    fn encode_chunk(
+        &self,
+        tables: &rans::EncTables,
+        exps: &[u8],
+        his: &[u8],
+        scratch: &mut [u16],
+        out: &mut [u8],
+    ) -> Result<rans::ChunkInfo, OpError> {
+        rans::encode_chunk::<K>(tables, exps, his, scratch, out)
     }
 
     #[inline(never)]

@@ -66,3 +66,27 @@ Single thread, G elements/s, histogram plus build plus write (old build forced t
 | F8_E4M3 raw (Qwen3-VL) | 3.87 | 4.02 | 3.68 | 3.65 | 3.72 | 4.02 | 4.01 |
 
 v3, v4 and v4_icl trail the old loop by up to 9% because of LLVM's SLP vectorization of the index arithmetic; explained in DECISIONS.md. Histogram inner loop: 8 instructions per element scalar (13 per two elements on v2/portable), 21 per four elements on AVX tiers (`vpmovzxbd`, `vpslld`, 3 × `vpextrd`).
+
+## encode_chunk
+
+Output: the per-way exponent words, sign|mantissa words and escape bytes of every 1 Mi-element chunk are byte-identical to the old `codec::encode_chunk` streams for every float profile sample (64 MiB each), raw and coded, on every tier. A test-only reference rANS decoder also recovers every symbol, escape and coded sign|mantissa byte with all final states back at `RANS_L`.
+
+Two changes from the old encoder, neither of which alters a single output bit:
+
+- `x / freq` and `x % freq` use Lemire's exact 64-bit reciprocal (`mulhi(ceil(2^64/freq), x)`, `freq = 1` special-cased), checked exhaustively in a unit test for every frequency 0 to 4096.
+- Renormalization can be branch-free (`Kernels::ENCODE_BRANCHLESS`): the candidate word is always written below the cursor, which advances only when the word is kept. It is enabled on `amd64_v4`, `amd64_v4_icl` and `amd64_9800x3d`, where it measured 40 to 50% faster; on `amd64_v3`, `amd64_v2` and `portable` the branchy form measured 8 to 17% faster and stays the default.
+
+Single thread, G elements/s (old forced to one thread):
+
+| Sample | Mode | Old | 9800x3d | v4_icl | v4 | v3 | v2 | portable |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| BF16 (Qwen3.5) | raw | 0.37 | 0.49 | 0.52 | 0.51 | 0.40 | 0.37 | 0.36 |
+| BF16 (Qwen3.5) | coded | 0.15 | 0.23 | 0.17 | 0.17 | 0.17 | 0.16 | 0.16 |
+| F32 (SAM) | raw | 0.36 | 0.48 | 0.50 | 0.51 | 0.38 | 0.35 | 0.35 |
+| F32 (SAM) | coded | 0.15 | 0.24 | 0.18 | 0.18 | 0.17 | 0.16 | 0.16 |
+| F32 (Qwen3-VL scales, H(exp) about 1 bit) | raw | 0.51 | 0.49 | 0.53 | 0.53 | 0.59 | 0.50 | 0.52 |
+| F16 (SDXL) | raw | 0.37 | 0.51 | 0.51 | 0.52 | 0.40 | 0.36 | 0.36 |
+| F8_E4M3 (Qwen3-VL) | raw | 0.35 | 0.48 | 0.52 | 0.52 | 0.39 | 0.36 | 0.35 |
+| F8_E5M2 (Wan) | raw | 0.36 | 0.46 | 0.49 | 0.49 | 0.39 | 0.36 | 0.36 |
+
+The worst case is the low-entropy Qwen3-VL F32 sample on `amd64_9800x3d`, 4% below the old encoder (within the 5% rule). Encoding stays scalar per lane on every tier; a vectorized 16-lane encoder is a candidate for later work.

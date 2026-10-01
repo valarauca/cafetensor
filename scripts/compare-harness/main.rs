@@ -173,12 +173,81 @@ fn codebook(tiers: &[&'static dyn Operations]) {
     }
 }
 
+/// The old project's per-chunk encoder, serialized in the container's per-way order.
+#[inline(never)]
+fn old_encode(t: &tensor_compressor::codec::EncTables, e: &[u8], h: &[u8], cs: &mut tensor_compressor::codec::ChunkStreams, out: &mut Vec<u8>) {
+    tensor_compressor::codec::encode_chunk(t, e, h, cs);
+    for w in 0..4 {
+        for &v in cs.exp[w].iter().chain(&cs.sm[w]) {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&cs.esc[w]);
+    }
+}
+
+fn encode(tiers: &[&'static dyn Operations]) {
+    use general_backend::codebook::{Codebook, SmMode};
+    use general_backend::rans::{EncTables, encode_bound, encode_scratch_len};
+    use tensor_compressor::codec::{ChunkStreams, Codebook as OldCodebook, EncTables as OldTables, SmMode as OldMode};
+    const CHUNK: usize = 1 << 20;
+    println!("| sample | mode | old G elem/s | {} | equal |", tiers.iter().map(|t| format!("{} G elem/s", t.tier_name())).collect::<Vec<_>>().join(" | "));
+    println!("|---|---|---|{}---|", "---|".repeat(tiers.len()));
+    for p in load_profiles() {
+        for d in &p.dtypes {
+            let Some((fmt, ofmt)) = format_of(&d.dtype) else { continue };
+            let sample = Sampler::new(d, test_seed(d.seed)).sample(test_bytes(64 << 20));
+            let n = sample.len() / fmt.width;
+            let (mut e, mut h, mut l) = (vec![0u8; n], vec![0u8; n], vec![0u8; n * fmt.low_bytes()]);
+            old_split(ofmt, &sample, &mut e, &mut h, &mut l);
+            for (mode, omode) in [(SmMode::Raw, OldMode::Raw), (SmMode::Coded, OldMode::Coded)] {
+                if mode == SmMode::Coded && fmt.hi_bits() != 8 {
+                    continue;
+                }
+                let old_tables = OldTables::new(&OldCodebook::build(&e, &h, omode).unwrap());
+                let mut joint = vec![0u64; 65536];
+                for (&x, &y) in e.iter().zip(&h) {
+                    joint[(x as usize) << 8 | y as usize] += 1;
+                }
+                let cb = Codebook::build(joint.as_slice().try_into().unwrap(), mode).unwrap();
+                let tables = Box::new(EncTables::new(&cb).unwrap());
+                let (old, t_old) = best(2, || {
+                    let mut cs = ChunkStreams::default();
+                    let mut out = Vec::new();
+                    for (ce, ch) in e.chunks(CHUNK).zip(h.chunks(CHUNK)) {
+                        old_encode(&old_tables, ce, ch, &mut cs, &mut out);
+                    }
+                    out
+                });
+                let mut cells = Vec::new();
+                let mut equal = true;
+                for t in tiers {
+                    let mut scratch = vec![0u16; encode_scratch_len(CHUNK)];
+                    let mut buf = vec![0u8; encode_bound(CHUNK, tables.coded)];
+                    let (new, secs) = best(2, || {
+                        let mut out = Vec::new();
+                        for (ce, ch) in e.chunks(CHUNK).zip(h.chunks(CHUNK)) {
+                            let info = t.encode_chunk(&tables, ce, ch, &mut scratch, &mut buf).unwrap();
+                            out.extend_from_slice(&buf[..info.len]);
+                        }
+                        out
+                    });
+                    equal &= new == old;
+                    cells.push(gbps(n, secs));
+                }
+                println!("| {} {} | {mode:?} | {} | {} | {} |", p.source.file, d.dtype, gbps(n, t_old), cells.join(" | "), if equal { "yes" } else { "NO" });
+                assert!(equal, "encode mismatch on {} {} {mode:?}", p.source.file, d.dtype);
+            }
+        }
+    }
+}
+
 fn main() {
     let tiers = available();
     match std::env::args().nth(1).as_deref() {
         Some("crc32c") => crc32c(&tiers),
         Some("split") => split(&tiers),
         Some("codebook") => codebook(&tiers),
+        Some("encode") => encode(&tiers),
         other => panic!("unknown op {other:?}"),
     }
 }
