@@ -1,0 +1,80 @@
+cargo-features = ["profile-rustflags"]
+
+[workspace]
+resolver = "3"
+members = [
+    "cafetensor-bin",
+    "cafetensor-lib",
+    "platform/generic_operations",
+    "platform/general_backend",
+    "platform/amd64_ia64/v2",
+    "platform/amd64_ia64/v3",
+    "platform/amd64_ia64/v4",
+    "platform/amd64_ia64/v4_icl",
+    "platform/amd64_ia64/9800x3d",
+    "platform/os_specific/darwin",
+    "platform/os_specific/linux",
+    "platform/os_specific/os_common",
+    "testkit",
+    # "fuzz",  # Phase 5; never a default member
+]
+default-members = ["cafetensor-bin"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+cafetensor-lib     = { path = "cafetensor-lib" }
+cafetensor-testkit = { path = "testkit" }
+generic_operations = { path = "platform/generic_operations" }
+general_backend    = { path = "platform/general_backend" }
+amd64_v2           = { path = "platform/amd64_ia64/v2" }
+amd64_v3           = { path = "platform/amd64_ia64/v3" }
+amd64_v4           = { path = "platform/amd64_ia64/v4" }
+amd64_v4_icl       = { path = "platform/amd64_ia64/v4_icl" }
+amd64_9800x3d      = { path = "platform/amd64_ia64/9800x3d" }
+os_darwin          = { path = "platform/os_specific/darwin" }
+os_linux           = { path = "platform/os_specific/linux" }
+os_common          = { path = "platform/os_specific/os_common" }
+# testkit only
+rand        = "0.10.3"
+rand_core   = "0.10.1"
+rand_chacha = "0.10.0"
+safetensors = "0.8.0"
+# Every third-party dependency used by any member is declared here and
+# referenced from members as `{ workspace = true }`.
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+debug = "line-tables-only"
+
+# ---- tier flags: release ----
+[profile.release.package.amd64_v2]
+rustflags = ["-Ctarget-cpu=x86-64-v2"]
+[profile.release.package.amd64_v3]
+rustflags = ["-Ctarget-cpu=x86-64-v3"]
+[profile.release.package.amd64_v4]
+rustflags = ["-Ctarget-cpu=x86-64-v4"]
+[profile.release.package.amd64_v4_icl]
+rustflags = ["-Ctarget-cpu=x86-64-v4", "-Ctarget-feature=+avx512vbmi,+avx512vbmi2,+pclmulqdq,+vpclmulqdq"]
+[profile.release.package.amd64_9800x3d]
+rustflags = ["-Ctarget-cpu=znver5", "-Ctarget-feature=-rdseed"]
+
+# ---- tier flags: dev (opt-level 3 is load-bearing, see leak path 1) ----
+[profile.dev.package.amd64_v2]
+opt-level = 3
+rustflags = ["-Ctarget-cpu=x86-64-v2"]
+[profile.dev.package.amd64_v3]
+opt-level = 3
+rustflags = ["-Ctarget-cpu=x86-64-v3"]
+[profile.dev.package.amd64_v4]
+opt-level = 3
+rustflags = ["-Ctarget-cpu=x86-64-v4"]
+[profile.dev.package.amd64_v4_icl]
+opt-level = 3
+rustflags = ["-Ctarget-cpu=x86-64-v4", "-Ctarget-feature=+avx512vbmi,+avx512vbmi2,+pclmulqdq,+vpclmulqdq"]
+[profile.dev.package.amd64_9800x3d]
+opt-level = 3
+rustflags = ["-Ctarget-cpu=znver5", "-Ctarget-feature=-rdseed"]

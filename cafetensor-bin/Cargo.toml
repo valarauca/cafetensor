@@ -1,0 +1,12 @@
+[package]
+name = "cafetensor-bin"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "cafetensor"
+path = "src/main.rs"
+
+[dependencies]
+cafetensor-lib = { workspace = true }

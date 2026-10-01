@@ -1,0 +1,7 @@
+cmpxchg16b
+lahfsahf
+popcnt
+sse3
+sse4.1
+sse4.2
+ssse3

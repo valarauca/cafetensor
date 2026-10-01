@@ -1,0 +1,5 @@
+/target/
+*.safetensors
+*.cafetensor
+/samples/
+/compare-out/

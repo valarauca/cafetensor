@@ -1,0 +1,18 @@
+[package]
+name = "general_backend"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+generic_operations = { workspace = true }
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+amd64_v2      = { workspace = true }
+amd64_v3      = { workspace = true }
+amd64_v4      = { workspace = true }
+amd64_v4_icl  = { workspace = true }
+amd64_9800x3d = { workspace = true }
+
+# arm64 tier crates are deferred. When they exist, add a
+# [target.'cfg(target_arch = "aarch64")'.dependencies] block here.

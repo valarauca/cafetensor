@@ -1,0 +1,4 @@
+# The only permitted contents of [build] rustflags. CPU flags live in the root
+# Cargo.toml tier profile overrides and nowhere else.
+[build]
+rustflags = ["-Zshare-generics=n", "-Csymbol-mangling-version=v0"]

@@ -1,0 +1,8 @@
+[package]
+name = "amd64_v3"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+generic_operations = { workspace = true }
