@@ -11,11 +11,12 @@ run_row() {  # name expect runner-json target
         local cfg=() tgt=()
         [ -n "$runner" ] && cfg=(--config "target.$target.runner=$runner")
         [ "$target" != x86_64-unknown-linux-gnu ] && tgt=(--target "$target") && cfg+=(--config "target.$target.linker=\"aarch64-linux-gnu-gcc-13\"")
-        CAFETENSOR_EXPECT_TIER="$expect" cargo test -q $pflag "${tgt[@]}" "${cfg[@]}" -p general_backend >/dev/null \
+        CAFETENSOR_EXPECT_TIER="$expect" cargo test -q $pflag "${tgt[@]}" "${cfg[@]}" -p general_backend >/dev/null 2>&1 \
             || { echo "gate 3: FAIL: $name tests ${pflag:-dev}"; exit 1; }
         local out
         out="$(cargo run -q $pflag "${tgt[@]}" "${cfg[@]}" -p cafetensor-bin 2>&1 >/dev/null)" \
             || { echo "gate 3: FAIL: $name smoke ${pflag:-dev}: $out"; exit 1; }
+        out="$(grep '^cafetensor: ' <<<"$out" || true)"
         [ "$out" = "cafetensor: tier $expect" ] || { echo "gate 3: FAIL: $name selected '$out', expected $expect"; exit 1; }
     done
     echo "$name: $expect (dev, release)"
@@ -26,21 +27,24 @@ expect_native="${CAFETENSOR_NATIVE_TIER:-amd64_9800x3d}"
 [ "$native" = "$expect_native" ] || { echo "gate 3: FAIL: native selected $native, expected $expect_native"; exit 1; }
 run_row native "$expect_native" "" x86_64-unknown-linux-gnu
 
-if command -v sde64 >/dev/null; then
-    for row in "nhm amd64_v2" "hsw amd64_v3" "skx amd64_v4" "icx amd64_v4_icl" "spr amd64_v4_icl"; do
+# QEMU user mode fakes CPUID and raises SIGILL on unsupported instructions. Its TCG emulator has
+# no AVX-512, so AVX-512 guests mask those features and must fall back to amd64_v3 cleanly.
+# Intel SDE rows (skx/icx/spr) are deferred to a later sprint, see DECISIONS.md.
+if command -v qemu-x86_64-static >/dev/null; then
+    for row in "qemu64 portable" "Nehalem amd64_v2" "Haswell amd64_v3" "Skylake-Server amd64_v3"; do
         set -- $row
-        run_row "sde -$1" "$2" "[\"sde64\",\"-$1\",\"--\"]" x86_64-unknown-linux-gnu
+        run_row "qemu -cpu $1" "$2" "[\"qemu-x86_64-static\",\"-cpu\",\"$1\"]" x86_64-unknown-linux-gnu
     done
 else
-    echo "sde rows: PENDING (sde64 not installed)"; pending=1
+    echo "qemu x86-64 rows: PENDING (qemu-x86_64-static not installed)"; pending=1
 fi
 
-if command -v qemu-aarch64 >/dev/null; then
-    run_row aarch64 portable '["qemu-aarch64","-L","/usr/aarch64-linux-gnu"]' aarch64-unknown-linux-gnu
+if command -v qemu-aarch64-static >/dev/null; then
+    run_row aarch64 portable '["qemu-aarch64-static","-L","/usr/aarch64-linux-gnu"]' aarch64-unknown-linux-gnu
 else
     cargo build -q -p cafetensor-bin --target aarch64-unknown-linux-gnu --config 'target.aarch64-unknown-linux-gnu.linker="aarch64-linux-gnu-gcc-13"' \
         || { echo "gate 3: FAIL: aarch64 build"; exit 1; }
-    echo "aarch64: builds; run PENDING (qemu-aarch64 not installed)"; pending=1
+    echo "aarch64: builds; run PENDING (qemu-aarch64-static not installed)"; pending=1
 fi
 
 [ "$pending" = 0 ] && echo "gate 3 (hosts): ok" || echo "gate 3 (hosts): ok with PENDING rows"

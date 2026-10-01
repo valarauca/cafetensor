@@ -41,3 +41,20 @@ The old project used the `blake3` crate, which performs its own CPU dispatch. BL
 ## Gate 2 passes tier flags to rustdoc
 
 Profile `rustflags` reach rustc only, so documenting a tier crate trips its flag guard. `scripts/audit-public-api.sh` sets `RUSTDOCFLAGS` to the tier's flags for the `cargo public-api` run. `RUSTDOCFLAGS` is not one of the forbidden variables and does not affect compiled code.
+
+## Gate 3 uses QEMU, Intel SDE is deferred
+
+Intel SDE validation is deferred to a later sprint. Gate 3 runs the tests and a binary smoke run, in dev and release, under `qemu-x86_64-static -cpu <model>`, which fakes CPUID and raises SIGILL on unsupported instructions:
+
+| QEMU CPU | Expected tier |
+| --- | --- |
+| `qemu64` (x86-64 baseline) | `portable` |
+| `Nehalem` | `amd64_v2` |
+| `Haswell` | `amd64_v3` |
+| `Skylake-Server` | `amd64_v3` (QEMU TCG has no AVX-512, so those CPUID bits are masked and selection must fall back cleanly) |
+
+AArch64 runs under `qemu-aarch64-static -L /usr/aarch64-linux-gnu` and must select `portable`. The AVX-512 tiers (`amd64_v4`, `amd64_v4_icl`, `amd64_9800x3d`) are exercised natively on the 9800X3D, where `available()` lists all of them and gate 4 compares each against `portable`. Selection of `amd64_v4` and `amd64_v4_icl` as the best tier on real Skylake-SP and Ice Lake class hosts is not emulated until SDE lands.
+
+## llvm-mca for inner-loop throughput, not for ISA validation
+
+`llvm-mca` (LLVM 19, `-mcpu` per tier) is the gate 6 tool for inner-loop throughput and port-pressure comparisons between old and new code. Neither `llvm-mca` nor `llvm-mc` can validate that code stays inside a tier: both accept and schedule any x86 instruction regardless of `-mcpu` and `-mattr` (verified: `vpermb` is accepted for `-mcpu=nehalem`).
