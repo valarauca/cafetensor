@@ -1,4 +1,10 @@
 //! `amd64_v3` tier: built with `-Ctarget-cpu=x86-64-v3`.
+//!
+//! # Safety
+//!
+//! Every `unsafe` block calls a `core::arch` intrinsic whose CPU feature the flag guard below
+//! proves is enabled for this whole crate, and loads or stores only within the arrays passed
+//! to the hook.
 #![no_std]
 #![cfg(target_arch = "x86_64")]
 
@@ -44,6 +50,11 @@ impl Kernels for V3 {
                 _mm256_storeu_si256(out[at..].as_mut_ptr().cast(), r);
             }
         }
+    }
+
+    #[inline(always)]
+    fn crc32c_u64(state: u32, word: u64) -> u32 {
+        unsafe { core::arch::x86_64::_mm_crc32_u64(state as u64, word) as u32 }
     }
 }
 

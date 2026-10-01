@@ -66,3 +66,7 @@ A profile holds one pooled histogram per dtype per source, which is what samples
 ## Testkit uses the pure-Rust BLAKE3 backend
 
 `blake3` in the testkit (file provenance hashes and, later, the oracle for the ported BLAKE3) enables the crate's `pure` feature. Its C/assembly backend needs an unversioned `aarch64-linux-gnu-gcc` for AArch64 test builds, and the testkit does not need its speed.
+
+## crc32c on `amd64_9800x3d` is 20% slower than on `amd64_v4_icl`
+
+Both tiers run the identical VPCLMULQDQ fold source. `-Ctarget-cpu=znver5` makes LLVM unroll the loop 4× and group the carry-less multiplies, which measures about 40 GB/s against about 51 GB/s with generic scheduling on the same 9800X3D (details in docs/codegen-parity.md). The tier keeps the brief's `-Ctarget-cpu=znver5` for now, because Zen 5 scheduling may help the decoder ops still to be ported. Whether to tune this tier generically (`-Ztune-cpu=x86-64-v4`) is to be decided once more operations are measured. CRC is a small share of decode time either way, since it runs over compressed bytes only.

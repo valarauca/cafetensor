@@ -1,5 +1,5 @@
 //! Algorithms, generic over `K: Kernels`.
-use crate::{Kernels, OpError};
+use crate::{Kernels, OpError, crc};
 
 /// XOR the two halves of `input` into `output`, 64 bytes at a time through `K::xor64`.
 #[inline]
@@ -20,4 +20,21 @@ pub(crate) fn op_a<K: Kernels>(input: &[u8], output: &mut [u8]) -> Result<usize,
         *o = x ^ y;
     }
     Ok(half)
+}
+
+/// CRC32C over `data`: whole 256-byte blocks through `K::crc32c_blocks`, then 8-byte words
+/// through `K::crc32c_u64`, then single bytes through the table.
+#[inline]
+pub(crate) fn crc32c_update<K: Kernels>(state: u32, data: &[u8]) -> u32 {
+    let (blocks, rest) = data.as_chunks::<256>();
+    let state = if blocks.is_empty() {
+        state
+    } else {
+        K::crc32c_blocks(state, blocks)
+    };
+    let (words, bytes) = rest.as_chunks::<8>();
+    let state = words
+        .iter()
+        .fold(state, |c, w| K::crc32c_u64(c, u64::from_le_bytes(*w)));
+    bytes.iter().fold(state, |c, &b| crc::update_byte(c, b))
 }

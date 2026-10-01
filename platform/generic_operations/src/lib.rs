@@ -7,6 +7,7 @@ use core::marker::PhantomData;
 use core::simd::prelude::*;
 
 mod algorithms;
+pub mod crc;
 
 /// Fine-grained static hooks. Not object-safe by design.
 /// Every method has a portable `core::simd` default. A tier overrides a method only where an
@@ -16,6 +17,23 @@ pub trait Kernels: 'static {
     #[inline(always)]
     fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {
         *out = (u8x64::from_array(*a) ^ u8x64::from_array(*b)).to_array();
+    }
+
+    /// Advance a raw CRC32C state over one little-endian 8-byte word.
+    #[inline(always)]
+    fn crc32c_u64(state: u32, word: u64) -> u32 {
+        word.to_le_bytes()
+            .iter()
+            .fold(state, |c, &b| crc::update_byte(c, b))
+    }
+
+    /// Advance a raw CRC32C state over whole 256-byte blocks.
+    #[inline(always)]
+    fn crc32c_blocks(state: u32, blocks: &[[u8; 256]]) -> u32 {
+        blocks
+            .iter()
+            .flat_map(|b| b.as_chunks::<8>().0)
+            .fold(state, |c, w| Self::crc32c_u64(c, u64::from_le_bytes(*w)))
     }
 }
 
@@ -28,6 +46,10 @@ pub trait Operations: Sync + 'static {
     /// Plumbing check: XOR the first half of `input` with its second half into `output`.
     /// Returns the number of bytes written.
     fn op_a(&self, input: &[u8], output: &mut [u8]) -> Result<usize, OpError>;
+
+    /// Continue a raw CRC32C state over `data`, without pre or post inversion. The standard
+    /// CRC32C of `data` is `!crc32c_update(!0, data)`.
+    fn crc32c_update(&self, state: u32, data: &[u8]) -> u32;
 }
 
 /// Errors returned by [`Operations`] methods.
@@ -63,5 +85,10 @@ impl<K: Kernels> Operations for Engine<K> {
     #[inline(never)]
     fn op_a(&self, input: &[u8], output: &mut [u8]) -> Result<usize, OpError> {
         algorithms::op_a::<K>(input, output)
+    }
+
+    #[inline(never)]
+    fn crc32c_update(&self, state: u32, data: &[u8]) -> u32 {
+        algorithms::crc32c_update::<K>(state, data)
     }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Gate 3: tier selection and tests on native, SDE-emulated and AArch64 hosts, dev and release.
-# Rows whose emulator is missing are reported as PENDING, not passed.
+# Rows whose emulator is missing are reported as PENDING, not passed. Emulated rows check
+# selection and SIGILL safety, so their sample tests run on EMULATED_TEST_BYTES (256 KiB).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 pending=0
@@ -11,7 +12,9 @@ run_row() {  # name expect runner-json target
         local cfg=() tgt=()
         [ -n "$runner" ] && cfg=(--config "target.$target.runner=$runner")
         [ "$target" != x86_64-unknown-linux-gnu ] && tgt=(--target "$target") && cfg+=(--config "target.$target.linker=\"aarch64-linux-gnu-gcc-13\"")
-        CAFETENSOR_EXPECT_TIER="$expect" cargo test -q $pflag "${tgt[@]}" "${cfg[@]}" -p general_backend >/dev/null 2>&1 \
+        local bytes=()
+        [ -n "$runner" ] && bytes=(CAFETENSOR_TEST_BYTES="${EMULATED_TEST_BYTES:-262144}")
+        env "${bytes[@]}" CAFETENSOR_EXPECT_TIER="$expect" cargo test -q $pflag "${tgt[@]}" "${cfg[@]}" -p general_backend >/dev/null 2>&1 \
             || { echo "gate 3: FAIL: $name tests ${pflag:-dev}"; exit 1; }
         local out
         out="$(cargo run -q $pflag "${tgt[@]}" "${cfg[@]}" -p cafetensor-bin 2>&1 >/dev/null)" \

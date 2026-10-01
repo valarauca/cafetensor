@@ -1,4 +1,10 @@
 //! `amd64_9800x3d` tier: built with `-Ctarget-cpu=znver5 -Ctarget-feature=-rdseed`.
+//!
+//! # Safety
+//!
+//! Every `unsafe` block calls a `core::arch` intrinsic whose CPU feature the flag guard below
+//! proves is enabled for this whole crate, and loads or stores only within the arrays passed
+//! to the hook.
 #![no_std]
 #![cfg(target_arch = "x86_64")]
 
@@ -68,6 +74,72 @@ impl Kernels for Zen5 {
                 _mm512_loadu_si512(b.as_ptr().cast()),
             );
             _mm512_storeu_si512(out.as_mut_ptr().cast(), r);
+        }
+    }
+
+    #[inline(always)]
+    fn crc32c_u64(state: u32, word: u64) -> u32 {
+        unsafe { core::arch::x86_64::_mm_crc32_u64(state as u64, word) as u32 }
+    }
+
+    #[inline(always)]
+    fn crc32c_blocks(state: u32, blocks: &[[u8; 256]]) -> u32 {
+        use core::arch::x86_64::*;
+        use generic_operations::crc::{K128, K512, K2048};
+        let Some((first, rest)) = blocks.split_first() else {
+            return state;
+        };
+        unsafe {
+            let pair = |k: (u64, u64)| _mm_set_epi64x(k.1 as i64, k.0 as i64);
+            let k2048 = _mm512_broadcast_i32x4(pair(K2048));
+            let k512 = _mm512_broadcast_i32x4(pair(K512));
+            let k128 = pair(K128);
+            let fold512 = |x: __m512i, k: __m512i| {
+                _mm512_xor_si512(
+                    _mm512_clmulepi64_epi128::<0x00>(x, k),
+                    _mm512_clmulepi64_epi128::<0x11>(x, k),
+                )
+            };
+            let fold128 = |x: __m128i, k: __m128i| {
+                _mm_xor_si128(
+                    _mm_clmulepi64_si128::<0x00>(x, k),
+                    _mm_clmulepi64_si128::<0x11>(x, k),
+                )
+            };
+            let load = |b: &[u8; 256], j: usize| {
+                _mm512_loadu_si512(b[64 * j..64 * j + 64].as_ptr().cast())
+            };
+            let mut acc = [
+                load(first, 0),
+                load(first, 1),
+                load(first, 2),
+                load(first, 3),
+            ];
+            acc[0] = _mm512_xor_si512(
+                acc[0],
+                _mm512_zextsi128_si512(_mm_cvtsi32_si128(state as i32)),
+            );
+            for b in rest {
+                for (j, a) in acc.iter_mut().enumerate() {
+                    *a = _mm512_xor_si512(fold512(*a, k2048), load(b, j));
+                }
+            }
+            let mut x = acc[0];
+            for &a in &acc[1..] {
+                x = _mm512_xor_si512(fold512(x, k512), a);
+            }
+            let lanes = [
+                _mm512_extracti32x4_epi32::<0>(x),
+                _mm512_extracti32x4_epi32::<1>(x),
+                _mm512_extracti32x4_epi32::<2>(x),
+                _mm512_extracti32x4_epi32::<3>(x),
+            ];
+            let mut r = lanes[0];
+            for &l in &lanes[1..] {
+                r = _mm_xor_si128(fold128(r, k128), l);
+            }
+            let c = _mm_crc32_u64(0, _mm_cvtsi128_si64(r) as u64);
+            _mm_crc32_u64(c, _mm_extract_epi64::<1>(r) as u64) as u32
         }
     }
 }
