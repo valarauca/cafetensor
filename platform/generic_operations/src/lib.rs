@@ -14,6 +14,7 @@ use core::simd::prelude::*;
 mod algorithms;
 pub mod codebook;
 pub mod crc;
+pub mod decode;
 pub mod format;
 mod planes;
 pub mod rans;
@@ -27,6 +28,15 @@ pub trait Kernels: 'static {
     /// Encode renormalization without a data-dependent branch. Output is identical either way;
     /// which is faster depends on the tier (see docs/codegen-parity.md).
     const ENCODE_BRANCHLESS: bool = false;
+
+    /// Decode as many leading elements of a chunk as this tier can with vector code, in whole
+    /// groups, and return how many; the scalar path decodes the rest. The default decodes
+    /// nothing.
+    #[inline(always)]
+    fn decode_groups(t: &decode::DecTables, st: &mut decode::ChunkState, out: &mut [u8]) -> usize {
+        let _ = (t, st, out);
+        0
+    }
 
     /// `out = a ^ b` over one 64-byte block.
     #[inline(always)]
@@ -95,6 +105,17 @@ pub trait Operations: Sync + 'static {
         scratch: &mut [u16],
         out: &mut [u8],
     ) -> Result<rans::ChunkInfo, OpError>;
+
+    /// Decode one chunk into `out` (`chunk.elems * fmt.width` bytes). Every stream must be
+    /// consumed exactly and every lane must return to its initial state, otherwise the chunk
+    /// is rejected as corrupt.
+    fn decode_chunk(
+        &self,
+        tables: &decode::DecTables,
+        fmt: Format,
+        chunk: decode::ChunkRef,
+        out: &mut [u8],
+    ) -> Result<(), OpError>;
 }
 
 /// Errors returned by [`Operations`] methods.
@@ -159,6 +180,17 @@ impl<K: Kernels> Operations for Engine<K> {
         out: &mut [u8],
     ) -> Result<rans::ChunkInfo, OpError> {
         rans::encode_chunk::<K>(tables, exps, his, scratch, out)
+    }
+
+    #[inline(never)]
+    fn decode_chunk(
+        &self,
+        tables: &decode::DecTables,
+        fmt: Format,
+        chunk: decode::ChunkRef,
+        out: &mut [u8],
+    ) -> Result<(), OpError> {
+        decode::decode_chunk::<K>(tables, fmt, chunk, out)
     }
 
     #[inline(never)]
