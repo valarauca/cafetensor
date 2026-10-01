@@ -7,8 +7,19 @@ publish.workspace = true
 [lib]
 name = "cafetensor_testkit"
 
+[[bin]]
+name = "profile-extract"
+path = "src/bin/profile-extract.rs"
+
 [dependencies]
 rand        = { workspace = true }
 rand_core   = { workspace = true }
 rand_chacha = { workspace = true }
 safetensors = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+toml        = { workspace = true }
+blake3      = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }

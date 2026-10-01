@@ -58,3 +58,11 @@ AArch64 runs under `qemu-aarch64-static -L /usr/aarch64-linux-gnu` and must sele
 ## llvm-mca for inner-loop throughput, not for ISA validation
 
 `llvm-mca` (LLVM 19, `-mcpu` per tier) is the gate 6 tool for inner-loop throughput and port-pressure comparisons between old and new code. Neither `llvm-mca` nor `llvm-mc` can validate that code stays inside a tier: both accept and schedule any x86 instruction regardless of `-mcpu` and `-mattr` (verified: `vpermb` is accepted for `-mcpu=nehalem`).
+
+## Testkit profiles pool tensors and also record per-tensor entropy
+
+A profile holds one pooled histogram per dtype per source, which is what samples are drawn from. The codec builds one model per tensor, so pooled entropy overstates what the old project achieved (SAM 2.1 F32: pooled 26.84 bits, per tensor 26.58, old project 26.67). Profiles record both. Ratio checks on generated samples compare against the sample's own entropy, and comparisons with `old_ratio` use the per-tensor figures.
+
+## Testkit uses the pure-Rust BLAKE3 backend
+
+`blake3` in the testkit (file provenance hashes and, later, the oracle for the ported BLAKE3) enables the crate's `pure` feature. Its C/assembly backend needs an unversioned `aarch64-linux-gnu-gcc` for AArch64 test builds, and the testkit does not need its speed.
