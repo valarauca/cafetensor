@@ -123,11 +123,62 @@ fn split(tiers: &[&'static dyn Operations]) {
     }
 }
 
+fn codebook(tiers: &[&'static dyn Operations]) {
+    use general_backend::codebook::{CODEBOOK_MAX_BYTES, Codebook, SmMode};
+    use tensor_compressor::codec::{Codebook as OldCodebook, SmMode as OldMode};
+    println!("| sample | mode | old build (2 threads) GB/s | {} | codebook bytes equal |",
+        tiers.iter().map(|t| format!("{} histogram+build GB/s", t.tier_name())).collect::<Vec<_>>().join(" | "));
+    println!("|---|---|---|{}---|", "---|".repeat(tiers.len()));
+    for p in load_profiles() {
+        for d in &p.dtypes {
+            let Some((fmt, ofmt)) = format_of(&d.dtype) else { continue };
+            let sample = Sampler::new(d, test_seed(d.seed)).sample(test_bytes(256 << 20));
+            let n = sample.len() / fmt.width;
+            let (mut e, mut h, mut l) = (vec![0u8; n], vec![0u8; n], vec![0u8; n * fmt.low_bytes()]);
+            old_split(ofmt, &sample, &mut e, &mut h, &mut l);
+            for (mode, omode) in [(SmMode::Raw, OldMode::Raw), (SmMode::Coded, OldMode::Coded)] {
+                if mode == SmMode::Coded && fmt.hi_bits() != 8 {
+                    continue;
+                }
+                let (old, t_old) = best(3, || {
+                    let cb = OldCodebook::build(&e, &h, omode).expect("old codebook");
+                    let mut out = Vec::new();
+                    cb.write(&mut out);
+                    out
+                });
+                let mut cells = Vec::new();
+                let mut equal = true;
+                for t in tiers {
+                    let (new, secs) = best(3, || {
+                        let mut joint = vec![0u64; 65536];
+                        let mut part = Box::new([0u32; 65536]);
+                        for (ce, ch) in e.chunks(1 << 20).zip(h.chunks(1 << 20)) {
+                            part.fill(0);
+                            t.histogram(ce, ch, &mut part).unwrap();
+                            joint.iter_mut().zip(part.iter()).for_each(|(a, &b)| *a += b as u64);
+                        }
+                        let cb = Codebook::build(joint.as_slice().try_into().unwrap(), mode).expect("new codebook");
+                        let mut out = vec![0u8; CODEBOOK_MAX_BYTES];
+                        let k = cb.write(&mut out).unwrap();
+                        out.truncate(k);
+                        out
+                    });
+                    equal &= new == old;
+                    cells.push(gbps(n, secs));
+                }
+                println!("| {} {} | {mode:?} | {} | {} | {} |", p.source.file, d.dtype, gbps(n, t_old), cells.join(" | "), if equal { "yes" } else { "NO" });
+                assert!(equal, "codebook mismatch on {} {} {mode:?}", p.source.file, d.dtype);
+            }
+        }
+    }
+}
+
 fn main() {
     let tiers = available();
     match std::env::args().nth(1).as_deref() {
         Some("crc32c") => crc32c(&tiers),
         Some("split") => split(&tiers),
+        Some("codebook") => codebook(&tiers),
         other => panic!("unknown op {other:?}"),
     }
 }

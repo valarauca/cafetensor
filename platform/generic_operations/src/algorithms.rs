@@ -38,3 +38,23 @@ pub(crate) fn crc32c_update<K: Kernels>(state: u32, data: &[u8]) -> u32 {
         .fold(state, |c, w| K::crc32c_u64(c, u64::from_le_bytes(*w)));
     bytes.iter().fold(state, |c, &b| crc::update_byte(c, b))
 }
+
+/// Joint (exponent, high residual) counts of one chunk.
+#[inline]
+#[allow(
+    clippy::extra_unused_type_parameters,
+    reason = "algorithms are generic over K so each tier instantiates them with its own flags"
+)]
+pub(crate) fn histogram<K: Kernels>(
+    exps: &[u8],
+    his: &[u8],
+    joint: &mut [u32; 65536],
+) -> Result<(), OpError> {
+    if exps.len() != his.len() {
+        return Err(OpError::Corrupt);
+    }
+    for (&e, &h) in exps.iter().zip(his) {
+        joint[(e as usize) << 8 | h as usize] += 1;
+    }
+    Ok(())
+}

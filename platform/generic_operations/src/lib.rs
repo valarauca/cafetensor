@@ -2,11 +2,17 @@
 //! crate with that crate's target flags.
 #![no_std]
 #![feature(portable_simd)]
+#![feature(core_intrinsics)]
+#![allow(
+    internal_features,
+    reason = "core::intrinsics::log matches the old std f64::ln bit for bit"
+)]
 
 use core::marker::PhantomData;
 use core::simd::prelude::*;
 
 mod algorithms;
+pub mod codebook;
 pub mod crc;
 pub mod format;
 mod planes;
@@ -68,6 +74,10 @@ pub trait Operations: Sync + 'static {
 
     /// Pack the low `hi_bits` bits of every high residual into bitplanes, see [`plane_len`].
     fn pack_bitplanes(&self, his: &[u8], hi_bits: u32, out: &mut [u8]) -> Result<(), OpError>;
+
+    /// Add the joint (exponent, high residual) counts of one chunk to `joint`, indexed
+    /// `exp << 8 | hi`. The caller keeps a chunk below 2^32 elements and sums chunks in `u64`.
+    fn histogram(&self, exps: &[u8], his: &[u8], joint: &mut [u32; 65536]) -> Result<(), OpError>;
 }
 
 /// Errors returned by [`Operations`] methods.
@@ -120,6 +130,11 @@ impl<K: Kernels> Operations for Engine<K> {
         los: &mut [u8],
     ) -> Result<(), OpError> {
         planes::split_planes::<K>(fmt, bytes, exps, his, los)
+    }
+
+    #[inline(never)]
+    fn histogram(&self, exps: &[u8], his: &[u8], joint: &mut [u32; 65536]) -> Result<(), OpError> {
+        algorithms::histogram::<K>(exps, his, joint)
     }
 
     #[inline(never)]

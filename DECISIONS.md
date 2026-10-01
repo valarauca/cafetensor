@@ -32,8 +32,7 @@ The old project used the `blake3` crate, which performs its own CPU dispatch. BL
 
 ## `f64::ln` in `no_std`
 
-`normalize()` needs `ln`. `generic_operations` enables `#![feature(core_float_math)]`. If a result ever differs from the old `std` build, gate 6 falls back to cross-decoding and the case is recorded here.
-
+`normalize()` needs `ln`, which `core` does not provide (`core::f64::math` has no logarithm on the pinned nightly). `generic_operations` calls `core::intrinsics::log` (what `std`'s `f64::ln` calls) under `#![feature(core_intrinsics)]`. It lowers to the same `llvm.log.f64` / libm `log` that `std`'s `f64::ln` uses, so normalized frequencies match the old project bit for bit on the same host.
 ## Empty OS re-exports carry `allow(unused_imports)`
 
 `os_linux` and `os_darwin` start empty as the brief requires, so the glob re-exports in `os_common` are unused until mainline code adds items.
@@ -70,3 +69,7 @@ A profile holds one pooled histogram per dtype per source, which is what samples
 ## crc32c on `amd64_9800x3d` is 20% slower than on `amd64_v4_icl`
 
 Both tiers run the identical VPCLMULQDQ fold source. `-Ctarget-cpu=znver5` makes LLVM unroll the loop 4× and group the carry-less multiplies, which measures about 40 GB/s against about 51 GB/s with generic scheduling on the same 9800X3D (details in docs/codegen-parity.md). The tier keeps the brief's `-Ctarget-cpu=znver5` for now, because Zen 5 scheduling may help the decoder ops still to be ported. Agreed with the owner: decide after the decoder is ported, by measuring both tunings on the decode loop. LLVM's Zen 5 model (and `llvm-mca`) rates both schedules equal while the real chip does not, so the final call is validated on real hardware, including other Zen 5 and Intel hosts reached over SSH, not on the model. CRC is a small share of decode time either way, since it runs over compressed bytes only.
+
+## Histogram on v3, v4 and v4_icl is about 10% slower than the old scalar loop
+
+The joint histogram is the same scalar loop on every tier. On AVX tiers LLVM's SLP vectorizer computes four `exp << 8` indices in an xmm register and extracts them with `vpextrd`, which measures 4.3 to 4.4 G elements/s against 4.9 on `amd64_v2`, `portable` and `amd64_9800x3d` (single thread, 256 Mi elements), and 5 to 9% below the old project's loop on one thread. A word-at-a-time variant was slower on every tier (3.6 to 4.6). The loop is kept: the histogram is one pass per tensor before the rANS encode, which dominates encode time, so the end-to-end cost is around 1 to 2% on those tiers. Codebook bytes are identical to the old project in every case.

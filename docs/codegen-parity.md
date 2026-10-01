@@ -50,3 +50,19 @@ Inner loops of the split helpers (instantiated per tier, so each tier's copy is 
 | `split_w2` (BF16, F16), 64 elements | 98 to 132 | 98 to 132 | 46 to 58 | 27 to 39 | 53 to 75 | 56 to 59 |
 | `split_w4` (F32), 16 elements | 70 | 66 | 37 | 22 | 22 | 56 to 59 |
 | `split_w1` (FP8), 64 elements | 47 | 47 | 21 | 20 | 36 | 56 to 59 |
+
+## histogram and codebook build
+
+Output: the serialized codebook (`Codebook::build` then `write`) is byte-identical to the old project's for every float profile sample, in raw mode and, for BF16 and F32, in coded sign|mantissa mode, on every tier. The new path builds the joint histogram per 1 Mi-element chunk through the selected tier and sums it in `u64`; the old path built it in one rayon fold.
+
+Single thread, G elements/s, histogram plus build plus write (old build forced to one thread with `RAYON_NUM_THREADS=1`):
+
+| Sample | Old | 9800x3d | v4_icl | v4 | v3 | v2 | portable |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| BF16 raw (Qwen3.5) | 3.40 | 3.66 | 3.10 | 3.11 | 3.14 | 3.48 | 3.45 |
+| BF16 coded (Qwen3.5) | 3.19 | 3.44 | 3.01 | 2.98 | 3.04 | 3.32 | 3.30 |
+| F32 raw (SAM) | 3.46 | 3.91 | 3.39 | 3.30 | 3.45 | 3.83 | 3.90 |
+| F16 raw (SDXL) | 2.95 | 3.34 | 3.05 | 3.04 | 3.01 | 3.20 | 3.20 |
+| F8_E4M3 raw (Qwen3-VL) | 3.87 | 4.02 | 3.68 | 3.65 | 3.72 | 4.02 | 4.01 |
+
+v3, v4 and v4_icl trail the old loop by up to 9% because of LLVM's SLP vectorization of the index arithmetic; explained in DECISIONS.md. Histogram inner loop: 8 instructions per element scalar (13 per two elements on v2/portable), 21 per four elements on AVX tiers (`vpmovzxbd`, `vpslld`, 3 × `vpextrd`).
