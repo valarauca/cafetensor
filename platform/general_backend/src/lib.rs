@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 
 use generic_operations::{Engine, Kernels};
-pub use generic_operations::{OpError, Operations};
+pub use generic_operations::{Format, OpError, Operations, plane_len};
 
 mod detect;
 

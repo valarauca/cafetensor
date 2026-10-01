@@ -8,6 +8,10 @@ use core::simd::prelude::*;
 
 mod algorithms;
 pub mod crc;
+pub mod format;
+mod planes;
+
+pub use format::{Format, plane_len};
 
 /// Fine-grained static hooks. Not object-safe by design.
 /// Every method has a portable `core::simd` default. A tier overrides a method only where an
@@ -50,6 +54,20 @@ pub trait Operations: Sync + 'static {
     /// Continue a raw CRC32C state over `data`, without pre or post inversion. The standard
     /// CRC32C of `data` is `!crc32c_update(!0, data)`.
     fn crc32c_update(&self, state: u32, data: &[u8]) -> u32;
+
+    /// Split little-endian elements of `fmt` into the exponent plane, the high residual plane
+    /// (one byte per element each) and `fmt.low_bytes()` low mantissa bytes per element.
+    fn split_planes(
+        &self,
+        fmt: Format,
+        bytes: &[u8],
+        exps: &mut [u8],
+        his: &mut [u8],
+        los: &mut [u8],
+    ) -> Result<(), OpError>;
+
+    /// Pack the low `hi_bits` bits of every high residual into bitplanes, see [`plane_len`].
+    fn pack_bitplanes(&self, his: &[u8], hi_bits: u32, out: &mut [u8]) -> Result<(), OpError>;
 }
 
 /// Errors returned by [`Operations`] methods.
@@ -90,5 +108,22 @@ impl<K: Kernels> Operations for Engine<K> {
     #[inline(never)]
     fn crc32c_update(&self, state: u32, data: &[u8]) -> u32 {
         algorithms::crc32c_update::<K>(state, data)
+    }
+
+    #[inline(never)]
+    fn split_planes(
+        &self,
+        fmt: Format,
+        bytes: &[u8],
+        exps: &mut [u8],
+        his: &mut [u8],
+        los: &mut [u8],
+    ) -> Result<(), OpError> {
+        planes::split_planes::<K>(fmt, bytes, exps, his, los)
+    }
+
+    #[inline(never)]
+    fn pack_bitplanes(&self, his: &[u8], hi_bits: u32, out: &mut [u8]) -> Result<(), OpError> {
+        planes::pack_bitplanes::<K>(his, hi_bits, out)
     }
 }

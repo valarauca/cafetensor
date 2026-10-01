@@ -60,8 +60,9 @@ import os, re, sys
 op = os.environ["OP"]
 targets = {
     "crc32c": [("old update_vpclmul", "update_vpclmul"), ("old update_hw", "update_hw"), ("old update_table", "update_table")],
+    "split": [("old split loop", "old_split"), ("old bitplanes loop", "old_bitplanes")],
 }[op]
-new_sym = {"crc32c": "13crc32c_update"}[op]
+new_syms = {"crc32c": ["13crc32c_update"], "split": ["8split_w1", "8split_w2", "8split_w4", "14pack_bitplanes"]}[op]
 funcs, cur = {}, None
 for line in open(sys.argv[1]):
     m = re.match(r"^([0-9a-f]+) <(.+)>:$", line)
@@ -83,13 +84,16 @@ def report(label, sym):
     l = loops(funcs[sym])
     print(f"  {label}: {len(funcs[sym])} instructions, loops {sorted(l)}")
 tiers = {"8amd64_v2": "amd64_v2", "8amd64_v3": "amd64_v3", "8amd64_v4": "amd64_v4",
-         "12amd64_v4_icl": "amd64_v4_icl", "13amd64_9800x3d": "amd64_9800x3d", "8Portable": "portable"}
-for sym in sorted(funcs):
-    if new_sym in sym and "Engine" in sym:
-        tier = next((v for k, v in tiers.items() if k in sym), sym)
-        report(f"new {tier}", sym)
+         "12amd64_v4_icl": "amd64_v4_icl", "13amd64_9800x3d": "amd64_9800x3d", "8Portable": "portable",
+         "15general_backend": "portable"}
+for new_sym in new_syms:
+    for sym in sorted(funcs):
+        if new_sym in sym and ("Engine" in sym or "planes" in sym):
+            tier = next((v for k, v in tiers.items() if k in sym), sym)
+            report(f"new {tier} {new_sym.lstrip('0123456789')}", sym)
 for label, frag in targets:
     for sym in funcs:
-        if frag in sym and "tensor_compressor" in sym:
+        if frag in sym:
             report(label, sym)
+            break
 PY
