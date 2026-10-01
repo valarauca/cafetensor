@@ -30,7 +30,22 @@ use generic_operations::{Engine, Kernels, Operations};
 /// its own (baseline) flags.
 struct V3;
 
-impl Kernels for V3 {}
+impl Kernels for V3 {
+    #[inline(always)]
+    fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {
+        use core::arch::x86_64::*;
+        for i in 0..2 {
+            let at = 32 * i;
+            unsafe {
+                let r = _mm256_xor_si256(
+                    _mm256_loadu_si256(a[at..].as_ptr().cast()),
+                    _mm256_loadu_si256(b[at..].as_ptr().cast()),
+                );
+                _mm256_storeu_si256(out[at..].as_mut_ptr().cast(), r);
+            }
+        }
+    }
+}
 
 /// The vtable is built here, so every `Engine<V3>` method is codegen'd here.
 static ENGINE: Engine<V3> = Engine::new("amd64_v3");

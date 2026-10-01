@@ -16,3 +16,6 @@ amd64_9800x3d = { workspace = true }
 
 # arm64 tier crates are deferred. When they exist, add a
 # [target.'cfg(target_arch = "aarch64")'.dependencies] block here.
+
+[dev-dependencies]
+cafetensor-testkit = { workspace = true }

@@ -35,7 +35,19 @@ use generic_operations::{Engine, Kernels, Operations};
 /// its own (baseline) flags.
 struct V4;
 
-impl Kernels for V4 {}
+impl Kernels for V4 {
+    #[inline(always)]
+    fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {
+        use core::arch::x86_64::*;
+        unsafe {
+            let r = _mm512_xor_si512(
+                _mm512_loadu_si512(a.as_ptr().cast()),
+                _mm512_loadu_si512(b.as_ptr().cast()),
+            );
+            _mm512_storeu_si512(out.as_mut_ptr().cast(), r);
+        }
+    }
+}
 
 /// The vtable is built here, so every `Engine<V4>` method is codegen'd here.
 static ENGINE: Engine<V4> = Engine::new("amd64_v4");

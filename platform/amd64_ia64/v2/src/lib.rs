@@ -21,7 +21,22 @@ use generic_operations::{Engine, Kernels, Operations};
 /// its own (baseline) flags.
 struct V2;
 
-impl Kernels for V2 {}
+impl Kernels for V2 {
+    #[inline(always)]
+    fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {
+        use core::arch::x86_64::*;
+        for i in 0..4 {
+            let at = 16 * i;
+            unsafe {
+                let r = _mm_xor_si128(
+                    _mm_loadu_si128(a[at..].as_ptr().cast()),
+                    _mm_loadu_si128(b[at..].as_ptr().cast()),
+                );
+                _mm_storeu_si128(out[at..].as_mut_ptr().cast(), r);
+            }
+        }
+    }
+}
 
 /// The vtable is built here, so every `Engine<V2>` method is codegen'd here.
 static ENGINE: Engine<V2> = Engine::new("amd64_v2");
