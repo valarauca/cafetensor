@@ -3,3 +3,4 @@
 *.cafetensor
 /samples/
 /compare-out/
+__pycache__/

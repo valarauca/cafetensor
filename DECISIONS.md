@@ -37,3 +37,7 @@ The old project used the `blake3` crate, which performs its own CPU dispatch. BL
 ## Empty OS re-exports carry `allow(unused_imports)`
 
 `os_linux` and `os_darwin` start empty as the brief requires, so the glob re-exports in `os_common` are unused until mainline code adds items.
+
+## Gate 2 passes tier flags to rustdoc
+
+Profile `rustflags` reach rustc only, so documenting a tier crate trips its flag guard. `scripts/audit-public-api.sh` sets `RUSTDOCFLAGS` to the tier's flags for the `cargo public-api` run. `RUSTDOCFLAGS` is not one of the forbidden variables and does not affect compiled code.

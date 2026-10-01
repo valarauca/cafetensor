@@ -1,5 +1,5 @@
 //! Runtime detection, one-time tier selection, the portable fallback tier and tier enumeration.
-#![feature(clflushopt_target_feature)]
+#![cfg_attr(target_arch = "x86_64", feature(clflushopt_target_feature))]
 use std::sync::LazyLock;
 
 use generic_operations::{Engine, Kernels};
@@ -23,27 +23,36 @@ pub fn operations() -> &'static dyn Operations {
 
 /// Every tier this host can run, best first, portable last. For tests and benches.
 pub fn available() -> Vec<&'static dyn Operations> {
-    let mut tiers: Vec<&'static dyn Operations> = Vec::new();
-    #[cfg(target_arch = "x86_64")]
-    {
-        if detect::amd64_9800x3d() {
-            tiers.push(amd64_9800x3d::operations());
-        }
-        if detect::amd64_v4_icl() {
-            tiers.push(amd64_v4_icl::operations());
-        }
-        if detect::amd64_v4() {
-            tiers.push(amd64_v4::operations());
-        }
-        if detect::amd64_v3() {
-            tiers.push(amd64_v3::operations());
-        }
-        if detect::amd64_v2() {
-            tiers.push(amd64_v2::operations());
-        }
-    }
+    let mut tiers = native_tiers();
     tiers.push(&PORTABLE);
     tiers
+}
+
+#[cfg(target_arch = "x86_64")]
+fn native_tiers() -> Vec<&'static dyn Operations> {
+    let mut tiers: Vec<&'static dyn Operations> = Vec::new();
+    if detect::amd64_9800x3d() {
+        tiers.push(amd64_9800x3d::operations());
+    }
+    if detect::amd64_v4_icl() {
+        tiers.push(amd64_v4_icl::operations());
+    }
+    if detect::amd64_v4() {
+        tiers.push(amd64_v4::operations());
+    }
+    if detect::amd64_v3() {
+        tiers.push(amd64_v3::operations());
+    }
+    if detect::amd64_v2() {
+        tiers.push(amd64_v2::operations());
+    }
+    tiers
+}
+
+/// AArch64 tiers are deferred; other architectures use `portable` only.
+#[cfg(not(target_arch = "x86_64"))]
+fn native_tiers() -> Vec<&'static dyn Operations> {
+    Vec::new()
 }
 
 /// `CAFETENSOR_TIER=<tier_name>` forces a tier for benchmarks and comparisons. An unsupported
