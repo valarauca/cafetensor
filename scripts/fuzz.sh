@@ -19,8 +19,13 @@ export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-1}"
 for t in "${targets[@]}"; do
     mkdir -p "fuzz/corpus/$t"
     echo "fuzz: $t for ${secs}s"
-    cargo fuzz run "$t" "fuzz/corpus/$t" -- -max_total_time="$secs" -rss_limit_mb=4096 -print_final_stats=1 2>&1 \
-        | grep -E '^(stat::number_of_executed_units|stat::peak_rss_mb|==[0-9]+==|SUMMARY|thread .* panicked|Failing input|Done )' || true
-    [ "${PIPESTATUS[0]}" = 0 ] || { echo "fuzz: $t FAILED"; exit 1; }
+    log="$(mktemp)"
+    if ! cargo fuzz run "$t" "fuzz/corpus/$t" -- -max_total_time="$secs" -rss_limit_mb=4096 -print_final_stats=1 >"$log" 2>&1; then
+        tail -n 60 "$log"
+        echo "fuzz: $t FAILED"
+        exit 1
+    fi
+    grep -E '^(stat::number_of_executed_units|stat::peak_rss_mb|Done )' "$log" || true
+    rm -f "$log"
 done
 echo "fuzz: ok"

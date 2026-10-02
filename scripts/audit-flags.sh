@@ -71,7 +71,7 @@ for profile in dev release; do
     pflag=(); [ "$profile" = release ] && pflag=(--release)
     for m in "${members[@]}"; do cargo clean -q "${pflag[@]}" -p "$m" 2>/dev/null || true; done
     log="$(mktemp)"
-    cargo build -v "${pflag[@]}" -p cafetensor-bin -p general_backend --all-targets >"$log" 2>&1 || { cat "$log"; fail "build ($profile)"; }
+    cargo build -v --color never "${pflag[@]}" -p cafetensor-bin -p general_backend --all-targets >"$log" 2>&1 || { cat "$log"; fail "build ($profile)"; }
     TIERS="${tiers[*]}" PROFILE="$profile" python3 - "$log" <<'PY'
 import os, re, shlex, sys
 sys.path.insert(0, "scripts")

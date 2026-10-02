@@ -15,9 +15,6 @@ on:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   fuzz:
     name: fuzz ${{ matrix.target }}
