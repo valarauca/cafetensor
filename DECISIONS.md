@@ -33,9 +33,9 @@ The old project used the `blake3` crate, which performs its own CPU dispatch. BL
 ## `f64::ln` in `no_std`
 
 `normalize()` needs `ln`, which `core` does not provide (`core::f64::math` has no logarithm on the pinned nightly). `generic_operations` calls `core::intrinsics::log` (what `std`'s `f64::ln` calls) under `#![feature(core_intrinsics)]`. It lowers to the same `llvm.log.f64` / libm `log` that `std`'s `f64::ln` uses, so normalized frequencies match the old project bit for bit on the same host.
-## Empty OS re-exports carry `allow(unused_imports)`
+## Empty OS re-exports (superseded)
 
-`os_linux` and `os_darwin` start empty as the brief requires, so the glob re-exports in `os_common` are unused until mainline code adds items.
+`os_linux` and `os_darwin` were removed in Phase 4 (see Library and binary); `os_common` holds the little OS-specific code there is.
 
 ## Gate 2 passes tier flags to rustdoc
 
@@ -115,7 +115,7 @@ A non-generic `#[inline]` helper (the scalar BLAKE3 `chunk_cv` at first) is copi
 
 - **Formats are byte-identical to the old project.** The tensor blob and the `.cafetensor` container are reproduced field for field, including the JSON key order, which needs `serde_json`'s `preserve_order` feature as the old project had. `scripts/compare-old.sh e2e` checks identical bytes and cross-decoding on the local checkpoints.
 - **Safetensors headers are parsed with `anamnesis` 0.6.9**, the old project's parser, so both accept and reject the same files.
-- **Huge-page buffers use `memmap2`** in `os_linux` (hugetlb 1 GiB and 2 MiB, then `MADV_HUGEPAGE`, then small pages, the old policy) and plain anonymous maps in `os_darwin`. Both expose the same `HugeBuf` and `Backing` items, and neither needs `unsafe` code of its own.
+- **`os_linux` and `os_darwin` are removed (owner's decision).** The only OS-specific code is the huge-page request for anonymous memory, and only Linux has one: Darwin takes no page size request from user space. `os_common` keeps that code behind its `cfg(target_os = "linux")`, so `cfg(target_os)` still appears only there, and every other OS gets an ordinary mapping. `HugeBuf` lives once in `cafetensor-lib` on top of `os_common::map_anon`, which tries hugetlb 1 GiB and 2 MiB, then `MADV_HUGEPAGE`, then small pages (the old policy). Mappings go through `memmap2`, so there is no `unsafe` code of our own.
 - **BLAKE3 streams through the tier.** `cafetensor_lib::hash::Hasher` keeps the reference stack of subtree chaining values. Each update cuts its input into the largest aligned power-of-two subtrees (leaving the last chunk buffered), hashes all of them at once on the rayon pool in 256 KiB leaves through `blake3_subtree`, and merges each subtree's parents in order through `blake3_parent`. A recursive `rayon::join` tree with 128 KiB leaves measured 25% slower; 256 KiB leaves run within 1% of one large call. `b3sum` reads the file on one extra thread into two alternating 16 MiB huge-page buffers, which stay in cache while the pool hashes them; mapping the file like the old `update_mmap_rayon` would need `unsafe`. Partial groups of whole chunks in a batch now go through the SIMD lanes padded, instead of the scalar path.
 - **`--backend` is gone from `decompress`.** The old flag chose between its scalar and AVX-512 decoders; tier choice is now process-wide through `CAFETENSOR_TIER`. Running the binary without a subcommand runs the self-test, which gate 3 uses as its smoke run.
 - **`compress_bytes` returns `Result`** instead of panicking on a partial element.

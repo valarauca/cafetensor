@@ -12,8 +12,6 @@ members = [
     "platform/amd64_ia64/v4",
     "platform/amd64_ia64/v4_icl",
     "platform/amd64_ia64/9800x3d",
-    "platform/os_specific/darwin",
-    "platform/os_specific/linux",
     "platform/os_specific/os_common",
     "testkit",
     # "fuzz",  # Phase 5; never a default member
@@ -34,8 +32,6 @@ amd64_v3           = { path = "platform/amd64_ia64/v3" }
 amd64_v4           = { path = "platform/amd64_ia64/v4" }
 amd64_v4_icl       = { path = "platform/amd64_ia64/v4_icl" }
 amd64_9800x3d      = { path = "platform/amd64_ia64/9800x3d" }
-os_darwin          = { path = "platform/os_specific/darwin" }
-os_linux           = { path = "platform/os_specific/linux" }
 os_common          = { path = "platform/os_specific/os_common" }
 # testkit only (blake3 is also the BLAKE3 oracle in tests)
 rand        = "0.10.3"

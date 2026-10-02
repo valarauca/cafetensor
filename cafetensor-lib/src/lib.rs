@@ -12,6 +12,7 @@
 //! * [`safetensors`] and [`shards`] read, write, join and split plain `.safetensors` files,
 //! * [`hash`] is BLAKE3 over the selected tier, in the container's `blake3-<hex>` notation.
 
+mod buffer;
 mod bytes;
 pub mod container;
 pub mod hash;
@@ -24,9 +25,9 @@ use std::sync::LazyLock;
 
 use general_backend::Operations;
 
+pub use buffer::HugeBuf;
 pub use general_backend::OpError;
 pub use general_backend::codebook::SmMode;
-pub use os_common::{Backing, HugeBuf};
 
 static TIER: LazyLock<&'static dyn Operations> = LazyLock::new(general_backend::operations);
 

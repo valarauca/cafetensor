@@ -64,7 +64,7 @@ Every call runs on the CPU tier `general_backend` selects once per process; `tie
 | `shards` | `join` merges sharded files; `split` writes shards plus a Hugging Face style index. |
 | `hash` | Streaming BLAKE3 (`Hasher`, `hash`, `b3sum`) in the container's `blake3-<hex>` notation. |
 
-`HugeBuf` is the decode output buffer: an anonymous mapping backed by 1 GiB or 2 MiB huge pages, or transparent huge pages, when the Linux kernel allows, and small pages otherwise.
+`HugeBuf` is the decode output buffer: an anonymous mapping backed by 1 GiB or 2 MiB huge pages, or transparent huge pages, when the Linux kernel allows, and ordinary pages otherwise. Darwin takes no page size request for anonymous memory, so it always gets ordinary pages.
 
 The `.cafetensor` container and the tensor blobs are byte-identical to those of the `tensor-compressor` project, so either tool decodes the other's files.
 

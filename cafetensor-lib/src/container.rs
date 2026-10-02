@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use crate::hash::{HASH_PREFIX, Hasher, hash_string};
 use crate::safetensors::Source;
 use crate::tensor::{DType, Options, compress_bytes, decompress_tensor};
-use crate::{Backing, Error, HugeBuf};
+use crate::{Error, HugeBuf};
 
 /// File extension of the container.
 pub const EXTENSION: &str = "cafetensor";
@@ -97,7 +97,8 @@ pub struct Stats {
     pub packed_bytes: u64,
     pub codec_time: Duration,
     pub hash_time: Duration,
-    pub backing: Backing,
+    /// Pages backing the decode buffer, as `HugeBuf::backing` names them.
+    pub backing: &'static str,
     pub checksum: String,
 }
 

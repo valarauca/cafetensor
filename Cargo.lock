@@ -152,6 +152,7 @@ dependencies = [
  "blake3",
  "cafetensor-testkit",
  "general_backend",
+ "memmap2",
  "os_common",
  "rayon",
  "serde",
@@ -469,21 +470,6 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "os_common"
-version = "0.0.0"
-dependencies = [
- "os_darwin",
- "os_linux",
-]
-
-[[package]]
-name = "os_darwin"
-version = "0.0.0"
-dependencies = [
- "memmap2",
-]
-
-[[package]]
-name = "os_linux"
 version = "0.0.0"
 dependencies = [
  "memmap2",

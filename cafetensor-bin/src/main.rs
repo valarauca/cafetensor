@@ -225,7 +225,7 @@ fn decompress(input: &Path, output: Option<PathBuf>, verify: bool, force: bool) 
     let s = container::decompress(input, &output, verify, force)?;
     let wall = start.elapsed().as_secs_f64();
     println!(
-        "{} tensors, {} bytes restored, {:.1}s, decode {:.3} GB/s ({}, {:?} pages)",
+        "{} tensors, {} bytes restored, {:.1}s, decode {:.3} GB/s ({}, {} pages)",
         s.tensors,
         s.raw_bytes,
         wall,
