@@ -43,9 +43,14 @@ rand_core   = "0.10.1"
 rand_chacha = "0.10.0"
 safetensors = "0.8.0"
 serde       = { version = "1.0.229", features = ["derive"] }
-serde_json  = "1.0.151"
+serde_json  = { version = "1.0.151", features = ["preserve_order"] }
 toml        = "1.1.6"
 blake3      = { version = "1.8.7", features = ["mmap", "rayon"] }
+# library, binary and OS crates
+anamnesis   = "0.6.9"
+clap        = { version = "4.6.7", features = ["derive"] }
+memmap2     = "0.9.11"
+rayon       = "1.12.0"
 # Every third-party dependency used by any member is declared here and
 # referenced from members as `{ workspace = true }`.
 

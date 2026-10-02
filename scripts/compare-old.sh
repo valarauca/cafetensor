@@ -2,12 +2,19 @@
 # Gate 6: compare one ported operation with the old project.
 #
 #   scripts/compare-old.sh <op>
+#   scripts/compare-old.sh e2e [checkpoint.safetensors ...]
 #
 # Builds scripts/compare-harness in a temporary directory outside both repositories, as a
 # consumer of this workspace (copying its tier overrides and build flags), runs it on samples
 # generated in memory from the committed profiles, prints a markdown table of output equality
 # and throughput per tier, then reports inner-loop instruction counts from the harness binary.
 # The temporary directory is deleted afterwards.
+#
+# `e2e` instead builds the old `tcz` (with the old project's own toolchain, into the temporary
+# directory) and the new `cafetensor`, then on each local checkpoint compresses with both,
+# requires byte-identical containers, decodes each container with the other tool, requires the
+# restored file to equal the input, and reports wall times. Both tools run with `-j $E2E_JOBS`
+# (default 2). Every file they write lives in the temporary directory.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 op="${1:?usage: compare-old.sh <op>}"
@@ -15,6 +22,69 @@ NEW="$PWD"
 OLD="${OLD_PROJECT:-$HOME/Documents/rust_stuff/gpu/tensor-compressor}"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/cafetensor-compare-XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
+
+if [ "$op" = e2e ]; then
+    shift
+    jobs="${E2E_JOBS:-2}"
+    first() { ls $1 2>/dev/null | head -1; }
+    if [ "$#" -eq 0 ]; then
+        set -- \
+            "$HOME/models/Qwen3.5-27B/model.safetensors-00002-of-00011.safetensors" \
+            "$(first '/srv/hub/models--facebook--sam2.1-hiera-large/snapshots/*/model.safetensors')" \
+            "$(first '/srv/hub/models--stabilityai--stable-diffusion-xl-base-1.0/snapshots/*/unet/diffusion_pytorch_model.fp16.safetensors')" \
+            "$(first '/srv/hub/models--Qwen--Qwen3-VL-8B-Thinking-FP8/snapshots/*/model-00002-of-00002.safetensors')" \
+            "$(first '/srv/hub/models--Kijai--WanVideo_comfy_fp8_scaled/snapshots/*/TI2V/Wan2_2-TI2V-5B_fp8_e5m2_scaled_KJ.safetensors')" \
+            "$(first '/srv/hub/models--IDEA-Research--grounding-dino-base/snapshots/*/model.safetensors')"
+    fi
+    (cd "$OLD" && cargo build -q --release --locked --target-dir "$tmp/old-target")
+    cargo build -q --release -p cafetensor-bin
+    old_bin="$tmp/old-target/release/tcz"
+    new_bin="$NEW/target/release/cafetensor"
+    now() { date +%s.%N; }
+    secs() { python3 -c "print(f'{$2 - $1:.2f}')"; }
+    echo "| checkpoint | bytes | ratio | identical | old compress s | new compress s | old decompress s | new decompress s | old b3sum s | new b3sum s |"
+    echo "|---|---|---|---|---|---|---|---|---|---|"
+    for f in "$@"; do
+        [ -f "$f" ] || { echo "missing checkpoint $f" >&2; exit 1; }
+        name="$(basename "$f")"
+        t0=$(now); "$old_bin" -j "$jobs" compress "$f" -o "$tmp/old.cafetensor" >/dev/null
+        t1=$(now); "$new_bin" -j "$jobs" compress "$f" -o "$tmp/new.cafetensor" >/dev/null 2>&1
+        t2=$(now)
+        cmp -s "$tmp/old.cafetensor" "$tmp/new.cafetensor" || { echo "containers differ for $f" >&2; exit 1; }
+        t3=$(now); "$old_bin" -j "$jobs" decompress "$tmp/new.cafetensor" -o "$tmp/by-old.safetensors" --verify >/dev/null
+        t4=$(now); "$new_bin" -j "$jobs" decompress "$tmp/old.cafetensor" -o "$tmp/by-new.safetensors" --verify >/dev/null 2>&1
+        t5=$(now)
+        cmp -s "$f" "$tmp/by-old.safetensors" || { echo "old tcz restored $f wrongly" >&2; exit 1; }
+        cmp -s "$f" "$tmp/by-new.safetensors" || { echo "cafetensor restored $f wrongly" >&2; exit 1; }
+        t6=$(now); want="$("$old_bin" -j "$jobs" b3sum "$f" | cut -d' ' -f1)"
+        t7=$(now); got="$("$new_bin" -j "$jobs" b3sum "$f" 2>/dev/null | cut -d' ' -f1)"
+        t8=$(now)
+        [ "$want" = "$got" ] || { echo "b3sum differs for $f" >&2; exit 1; }
+        bytes=$(stat -c %s "$f")
+        ratio=$(python3 -c "print(f'{$(stat -c %s "$tmp/new.cafetensor") / $bytes:.4f}')")
+        echo "| $name | $bytes | $ratio | yes | $(secs $t0 $t1) | $(secs $t1 $t2) | $(secs $t3 $t4) | $(secs $t4 $t5) | $(secs $t6 $t7) | $(secs $t7 $t8) |"
+        rm -f "${tmp:?}"/*.cafetensor "${tmp:?}"/*.safetensors
+    done
+    shards=()
+    for s in /srv/hub/models--Qwen--Qwen3-VL-8B-Thinking-FP8/snapshots/*/model-0000?-of-00002.safetensors; do
+        [ -f "$s" ] && shards+=("$s")
+    done
+    if [ "${#shards[@]}" -eq 2 ]; then
+        "$old_bin" -j "$jobs" compress "${shards[@]}" -o "$tmp/old.cafetensor" >/dev/null
+        "$new_bin" -j "$jobs" compress "${shards[@]}" -o "$tmp/new.cafetensor" >/dev/null 2>&1
+        cmp -s "$tmp/old.cafetensor" "$tmp/new.cafetensor" || { echo "multi-source containers differ" >&2; exit 1; }
+        mkdir -p "$tmp/by-old" "$tmp/by-new"
+        "$old_bin" -j "$jobs" decompress "$tmp/new.cafetensor" -o "$tmp/by-old" --verify >/dev/null
+        "$new_bin" -j "$jobs" decompress "$tmp/old.cafetensor" -o "$tmp/by-new" --verify >/dev/null 2>&1
+        for s in "${shards[@]}"; do
+            cmp -s "$s" "$tmp/by-old/$(basename "$s")" && cmp -s "$s" "$tmp/by-new/$(basename "$s")" \
+                || { echo "multi-source restore of $s differs" >&2; exit 1; }
+        done
+        echo
+        echo "multi-source (Qwen3-VL-8B-Thinking-FP8, 2 shards): identical containers, cross-decoded, restored"
+    fi
+    exit 0
+fi
 
 mkdir -p "$tmp/src" "$tmp/.cargo"
 cp scripts/compare-harness/main.rs "$tmp/src/main.rs"

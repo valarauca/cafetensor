@@ -3,3 +3,6 @@ name = "os_linux"
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
+
+[dependencies]
+memmap2 = { workspace = true }

@@ -51,3 +51,23 @@ opt-level = 3
 rustflags = ["-Ctarget-cpu=znver5", "-Ctarget-feature=-rdseed"]
 ```
 <!-- END tier-profiles -->
+
+## Using the library
+
+Every call runs on the CPU tier `general_backend` selects once per process; `tier_name()` reports it, and `CAFETENSOR_TIER=<name>` forces one (an unsupported name is a hard error). Parallel work runs on the global rayon pool.
+
+| Module | Purpose |
+| --- | --- |
+| `container` | `compress` gathers `.safetensors` files into one `.cafetensor`; `decompress` restores them byte for byte, optionally checking each file's BLAKE3; `read_header` parses the `rasn_comp` header. |
+| `tensor` | The per-tensor blob: `compress_bytes` and `decompress_tensor`, with `Options` for block size, coded sign\|mantissa and CRC32C. |
+| `safetensors` | `Source::open` parses a header without reading tensor data; `write_header` serializes one. |
+| `shards` | `join` merges sharded files; `split` writes shards plus a Hugging Face style index. |
+| `hash` | Streaming BLAKE3 (`Hasher`, `hash`, `b3sum`) in the container's `blake3-<hex>` notation. |
+
+`HugeBuf` is the decode output buffer: an anonymous mapping backed by 1 GiB or 2 MiB huge pages, or transparent huge pages, when the Linux kernel allows, and small pages otherwise.
+
+The `.cafetensor` container and the tensor blobs are byte-identical to those of the `tensor-compressor` project, so either tool decodes the other's files.
+
+## Command line
+
+`cafetensor-bin` builds the `cafetensor` binary, which logs the selected tier on stderr and offers `compress`, `decompress`, `inspect`, `b3sum`, `join`, `split` and `bench`. Run without a subcommand it runs a self-test on the selected tier. `-j N` limits the worker threads.

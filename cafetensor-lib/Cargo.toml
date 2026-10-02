@@ -7,3 +7,11 @@ publish.workspace = true
 [dependencies]
 general_backend = { workspace = true }
 os_common = { workspace = true }
+anamnesis = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+blake3 = { workspace = true }
+cafetensor-testkit = { workspace = true }

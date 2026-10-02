@@ -14,6 +14,11 @@ ALLOW = {
     "12amd64_v4_icl": {"vex", "ymm", "zmm", "k"},
     "13amd64_9800x3d": {"vex", "ymm", "zmm", "k"},
 }
+# Third-party functions compiled at baseline with #[target_feature] and called only after the
+# crate's own runtime check (see DECISIONS.md), matched by v0 path and the function name suffix.
+RUNTIME_DISPATCHED = [
+    (re.compile(r"6memchr4arch6x86_64.*\d+[a-z_]*_avx2$"), {"vex", "ymm"}),
+]
 VEX_GPR = {"andn", "bextr", "blsi", "blsmsk", "blsr", "bzhi", "mulx", "pdep", "pext", "rorx", "sarx", "shlx", "shrx"}
 def classes(line):
     parts = line.split("\t")
@@ -40,6 +45,7 @@ for line in open(sys.argv[1]):
 bad = []
 for sym, c in sorted(used.items()):
     allowed = set().union(*[a for k, a in ALLOW.items() if k in sym]) if any(k in sym for k in ALLOW) else set()
+    allowed |= set().union(*[a for p, a in RUNTIME_DISPATCHED if p.search(sym)])
     if not c <= allowed:
         bad.append(f"{sym}: uses {sorted(c - allowed)}")
 print(f"functions with vector extensions: {len(used)}")
