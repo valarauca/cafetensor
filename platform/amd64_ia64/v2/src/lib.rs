@@ -31,6 +31,8 @@ use generic_operations::{Engine, Kernels, Operations};
 struct V2;
 
 impl Kernels for V2 {
+    const BLAKE3_LANES: usize = 8;
+
     #[inline(always)]
     fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {
         use core::arch::x86_64::*;

@@ -41,6 +41,8 @@ use generic_operations::{Engine, Kernels, Operations};
 struct V3;
 
 impl Kernels for V3 {
+    const BLAKE3_LANES: usize = 16;
+
     #[inline(always)]
     fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {
         for i in 0..2 {

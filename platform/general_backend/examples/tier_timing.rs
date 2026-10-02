@@ -1,6 +1,6 @@
 //! Interleaved per-tier timing of one operation, to separate codegen from measurement order.
 //!
-//!   cargo run --release -p general_backend --example tier_timing -- [crc32c|histogram]
+//!   cargo run --release -p general_backend --example tier_timing -- [crc32c|histogram|blake3]
 use std::time::Instant;
 
 fn main() {
@@ -31,10 +31,26 @@ fn main() {
                     }
                     std::hint::black_box(&joint);
                 }
+                "blake3" => {
+                    std::hint::black_box(tiers[i].blake3_hash(std::hint::black_box(&data)));
+                }
                 other => panic!("unknown op {other}"),
             }
             best[i] = best[i].min(s.elapsed().as_secs_f64());
         }
+    }
+    if op == "blake3" {
+        let mut crate_best = f64::MAX;
+        for _ in 0..6 {
+            let s = Instant::now();
+            std::hint::black_box(blake3::hash(std::hint::black_box(&data)));
+            crate_best = crate_best.min(s.elapsed().as_secs_f64());
+        }
+        println!(
+            "{:16} {:.2} G/s",
+            "blake3 crate",
+            n as f64 / crate_best / 1e9
+        );
     }
     for (t, b) in tiers.iter().zip(best) {
         println!("{:16} {:.2} G/s", t.tier_name(), n as f64 / b / 1e9);

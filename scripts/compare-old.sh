@@ -41,6 +41,7 @@ publish = false
 tensor-compressor = {{ path = "{old}" }}
 general_backend = {{ path = "{new}/platform/general_backend" }}
 cafetensor-testkit = {{ path = "{new}/testkit" }}
+blake3 = "1.8"
 
 [profile.release]
 lto = "fat"
@@ -64,8 +65,9 @@ targets = {
     "codebook": [],
     "encode": [("old encode_stream", "encode_stream")],
     "decode": [("old decode_lines", "decode_lines")],
+    "blake3": [("old blake3_hash_many_avx512", "blake3_hash_many_avx512")],
 }[op]
-new_syms = {"crc32c": ["13crc32c_update"], "split": ["8split_w1", "8split_w2", "8split_w4", "14pack_bitplanes"], "codebook": ["9histogram"], "encode": ["13encode_stream", "12encode_chunk"], "decode": ["12decode_lines"]}[op]
+new_syms = {"crc32c": ["13crc32c_update"], "split": ["8split_w1", "8split_w2", "8split_w4", "14pack_bitplanes"], "codebook": ["9histogram"], "encode": ["13encode_stream", "12encode_chunk"], "decode": ["12decode_lines"], "blake3": ["8batch_cv"]}[op]
 funcs, cur = {}, None
 for line in open(sys.argv[1]):
     m = re.match(r"^([0-9a-f]+) <(.+)>:$", line)
@@ -91,7 +93,7 @@ tiers = {"8amd64_v2": "amd64_v2", "8amd64_v3": "amd64_v3", "8amd64_v4": "amd64_v
          "15general_backend": "portable"}
 for new_sym in new_syms:
     for sym in sorted(funcs):
-        if new_sym in sym and ("Engine" in sym or "planes" in sym or "algorithms" in sym or "4rans" in sym or "6decode" in sym):
+        if new_sym in sym and ("Engine" in sym or "planes" in sym or "algorithms" in sym or "4rans" in sym or "6decode" in sym or "6blake3" in sym):
             tier = next((v for k, v in tiers.items() if k in sym), sym)
             report(f"new {tier} {new_sym.lstrip('0123456789')}", sym)
 for label, frag in targets:

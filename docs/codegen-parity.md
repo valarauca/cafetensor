@@ -125,3 +125,19 @@ Main loop size (instructions in the largest loop of the instantiation, `llvm-obj
 | BF16 raw, 64 buckets | 287 | 239 | 237 | 245 |
 | BF16 coded, 64 buckets | 184 | 144 | 143 | 141 |
 | F8_E4M3 raw, 16 buckets | 150 | 127 | 126 | 124 |
+
+## blake3_hash
+
+Output: equal to the `blake3` crate (and so to `b3sum`) for every profile sample (256 MiB each) on every tier. Tests also check every length around block, chunk, 16-chunk and 256-chunk boundaries at unaligned offsets, random lengths, and that `blake3_subtree` plus `blake3_parent` reproduce the hash and the crate's `finalize_non_root` chaining values.
+
+The port hashes `BLAKE3_LANES` chunks at once, one per `u32` lane, then reduces each level of parents the same way, 256 chunks per stack-resident batch. The lane count is per tier: 16 on `amd64_v3` and the AVX-512 tiers, 8 on `amd64_v2`, 4 on `portable`. Wider measured faster on every x86 tier even where the state spills (`amd64_v3`: 4.7 GB/s at 16 lanes, 3.3 at 8; `amd64_v2`: 2.8 at 8, 2.7 at 4). No tier overrides a hook; the `core::simd` rotates and interleave transposes compile to `vprold` and `vpermt2d` on AVX-512.
+
+Single thread, GB/s. The old project hashed with the `blake3` crate (its AVX-512 assembly on this host), one thread per source while compressing and `update_mmap_rayon` for `tcz b3sum`:
+
+| Sample | Old (crate, one thread) | 9800x3d | v4_icl | v4 | v3 | v2 | portable |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| all ten profile samples | 9.38 to 9.53 | 10.19 to 10.94 | 9.89 to 10.98 | 9.93 to 10.93 | 4.58 to 4.88 | 2.48 to 2.80 | 2.38 to 2.40 |
+
+The AVX-512 tiers are 7 to 16% faster than the crate's assembly. The crate's AVX2 and SSE4.1 paths cannot be selected on this host, so `amd64_v3`, `amd64_v2` and `portable` have no measured old counterpart yet.
+
+Main loop of the 16-lane batch (`llvm-objdump`): about 970 to 1,140 instructions per 16-chunk block step on the AVX-512 tiers, against 870 to 1,290 in the crate's `blake3_hash_many_avx512`.

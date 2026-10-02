@@ -357,6 +357,30 @@ fn decode(tiers: &[&'static dyn Operations]) {
     }
 }
 
+fn blake3_op(tiers: &[&'static dyn Operations]) {
+    println!("| sample | old (blake3 crate, one thread) GB/s | {} | equal |", tiers.iter().map(|t| format!("{} GB/s", t.tier_name())).collect::<Vec<_>>().join(" | "));
+    println!("|---|---|{}---|", "---|".repeat(tiers.len()));
+    for p in load_profiles() {
+        for d in &p.dtypes {
+            let sample = Sampler::new(d, test_seed(d.seed)).sample(test_bytes(256 << 20));
+            let (want, t_old) = best(5, || {
+                let mut h = blake3::Hasher::new();
+                h.update(&sample);
+                *h.finalize().as_bytes()
+            });
+            let mut cells = Vec::new();
+            let mut equal = true;
+            for t in tiers {
+                let (got, secs) = best(5, || t.blake3_hash(&sample));
+                equal &= got == want;
+                cells.push(gbps(sample.len(), secs));
+            }
+            println!("| {} {} | {} | {} | {} |", p.source.file, d.dtype, gbps(sample.len(), t_old), cells.join(" | "), if equal { "yes" } else { "NO" });
+            assert!(equal, "BLAKE3 mismatch on {} {}", p.source.file, d.dtype);
+        }
+    }
+}
+
 fn main() {
     let tiers = available();
     match std::env::args().nth(1).as_deref() {
@@ -365,6 +389,7 @@ fn main() {
         Some("codebook") => codebook(&tiers),
         Some("encode") => encode(&tiers),
         Some("decode") => decode(&tiers),
+        Some("blake3") => blake3_op(&tiers),
         other => panic!("unknown op {other:?}"),
     }
 }

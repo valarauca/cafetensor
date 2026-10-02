@@ -12,6 +12,7 @@ use core::marker::PhantomData;
 use core::simd::prelude::*;
 
 mod algorithms;
+pub mod blake3;
 pub mod codebook;
 pub mod crc;
 pub mod decode;
@@ -28,6 +29,10 @@ pub trait Kernels: 'static {
     /// Encode renormalization without a data-dependent branch. Output is identical either way;
     /// which is faster depends on the tier (see docs/codegen-parity.md).
     const ENCODE_BRANCHLESS: bool = false;
+
+    /// Chunks or parents BLAKE3 compresses at once, one per `u32` lane: 4, 8 or 16. Wider
+    /// than the tier's registers spills the state.
+    const BLAKE3_LANES: usize = 4;
 
     /// Flat decode entries ([`codebook::ExpAlias::flat`]) of 16 exponent slots, each below
     /// `1 << EXP_BITS`, for an alias table of `N` buckets.
@@ -156,6 +161,24 @@ pub trait Operations: Sync + 'static {
         chunk: decode::ChunkRef,
         out: &mut [u8],
     ) -> Result<(), OpError>;
+
+    /// BLAKE3 hash of `data`, equal to `b3sum`.
+    fn blake3_hash(&self, data: &[u8]) -> [u8; blake3::OUT_LEN];
+
+    /// Non-root BLAKE3 chaining value of the subtree over `data`, whose first chunk is chunk
+    /// `chunk_counter` of the whole input. Meaningful only for the subtrees of the input's
+    /// tree: `data` spans a power of two number of chunks starting at a multiple of that
+    /// count, or is the input's final subtree.
+    fn blake3_subtree(&self, data: &[u8], chunk_counter: u64) -> [u8; blake3::OUT_LEN];
+
+    /// BLAKE3 parent of two chaining values. With `root` the result is the hash of the input
+    /// whose two top subtrees they are.
+    fn blake3_parent(
+        &self,
+        left: &[u8; blake3::OUT_LEN],
+        right: &[u8; blake3::OUT_LEN],
+        root: bool,
+    ) -> [u8; blake3::OUT_LEN];
 }
 
 /// Errors returned by [`Operations`] methods.
@@ -241,5 +264,25 @@ impl<K: Kernels> Operations for Engine<K> {
     #[inline(never)]
     fn pack_bitplanes(&self, his: &[u8], hi_bits: u32, out: &mut [u8]) -> Result<(), OpError> {
         planes::pack_bitplanes::<K>(his, hi_bits, out)
+    }
+
+    #[inline(never)]
+    fn blake3_hash(&self, data: &[u8]) -> [u8; blake3::OUT_LEN] {
+        blake3::hash::<K>(data)
+    }
+
+    #[inline(never)]
+    fn blake3_subtree(&self, data: &[u8], chunk_counter: u64) -> [u8; blake3::OUT_LEN] {
+        blake3::to_bytes(&blake3::subtree::<K>(data, chunk_counter))
+    }
+
+    #[inline(never)]
+    fn blake3_parent(
+        &self,
+        left: &[u8; blake3::OUT_LEN],
+        right: &[u8; blake3::OUT_LEN],
+        root: bool,
+    ) -> [u8; blake3::OUT_LEN] {
+        blake3::merge::<K>(left, right, root)
     }
 }

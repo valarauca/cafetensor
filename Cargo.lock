@@ -209,6 +209,7 @@ dependencies = [
  "amd64_v3",
  "amd64_v4",
  "amd64_v4_icl",
+ "blake3",
  "cafetensor-testkit",
  "generic_operations",
 ]

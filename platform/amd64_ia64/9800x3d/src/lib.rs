@@ -73,6 +73,7 @@ struct Zen5;
 
 impl Kernels for Zen5 {
     const ENCODE_BRANCHLESS: bool = true;
+    const BLAKE3_LANES: usize = 16;
 
     #[inline(always)]
     fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {

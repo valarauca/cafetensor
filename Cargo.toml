@@ -45,7 +45,7 @@ safetensors = "0.8.0"
 serde       = { version = "1.0.229", features = ["derive"] }
 serde_json  = "1.0.151"
 toml        = "1.1.6"
-blake3      = { version = "1.8.7", features = ["mmap", "rayon", "pure"] }
+blake3      = { version = "1.8.7", features = ["mmap", "rayon"] }
 # Every third-party dependency used by any member is declared here and
 # referenced from members as `{ workspace = true }`.
 

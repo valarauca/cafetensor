@@ -62,9 +62,9 @@ AArch64 runs under `qemu-aarch64-static -L /usr/aarch64-linux-gnu` and must sele
 
 A profile holds one pooled histogram per dtype per source, which is what samples are drawn from. The codec builds one model per tensor, so pooled entropy overstates what the old project achieved (SAM 2.1 F32: pooled 26.84 bits, per tensor 26.58, old project 26.67). Profiles record both. Ratio checks on generated samples compare against the sample's own entropy, and comparisons with `old_ratio` use the per-tensor figures.
 
-## Testkit uses the pure-Rust BLAKE3 backend
+## The blake3 crate uses its pure-Rust backend only on AArch64
 
-`blake3` in the testkit (file provenance hashes and, later, the oracle for the ported BLAKE3) enables the crate's `pure` feature. Its C/assembly backend needs an unversioned `aarch64-linux-gnu-gcc` for AArch64 test builds, and the testkit does not need its speed.
+`blake3` (testkit file provenance hashes, and the oracle for the ported BLAKE3) enables the crate's `pure` feature only for AArch64 targets. Its C/assembly backend needs an unversioned `aarch64-linux-gnu-gcc` for AArch64 test builds. On x86-64 it keeps its assembly backend, because the gate 6 harness links the testkit next to the old project and Cargo's feature unification would otherwise force `pure` onto the old project's hasher too.
 
 ## crc32c on `amd64_9800x3d` is 20% slower than on `amd64_v4_icl`
 
@@ -102,3 +102,11 @@ Explicit AVX2 `vpgatherdd` in the `amd64_v3` decode hooks measured 10 to 18% fas
 ## amd64_v4 decodes without VBMI
 
 The old decoder needed VBMI and VBMI2. `amd64_v4` (AVX-512 F/BW/CD/DQ/VL) widens the alias dividers to dwords and looks them up with `vpermd`/`vpermi2d`, reads the sign|mantissa context from `DecTables::ctx_nibbles` (eight 4-bit contexts per dword, one `vpermi2d` and a variable shift) instead of a gather, and patches escapes with the scalar default since they are rare. It decodes at the speed of the VBMI tiers on the 9800X3D.
+
+## BLAKE3 lane count is a per-tier constant
+
+`Kernels::BLAKE3_LANES` (4, 8 or 16) sets how many chunks or parents the ported BLAKE3 compresses at once. It is a constant rather than a hook because the whole hashing loop is generic over the lane count. Measured on the 9800X3D, wider was faster on every x86 tier even when the 16-word state and message spill: 16 lanes on `amd64_v3` and the AVX-512 tiers, 8 on `amd64_v2`. `portable` keeps 4, which fits AArch64 NEON registers without spills; it is revisited when an AArch64 host is measured.
+
+## Helpers called from tier code are generic over the kernel type
+
+A non-generic `#[inline]` helper (the scalar BLAKE3 `chunk_cv` at first) is copied into every crate that calls it, so the tier crates emitted AVX2 and AVX-512 copies under one untiered symbol name, and gate 5 rejected them. Every `generic_operations` function reachable from an `Engine` method is therefore either `#[inline(always)]` or generic over `K: Kernels`, which puts the tier into its mangled name; helpers that do not otherwise use `K` carry `#[allow(clippy::extra_unused_type_parameters)]`.
