@@ -4,3 +4,7 @@
 /samples/
 /compare-out/
 __pycache__/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
+/fuzz/target/

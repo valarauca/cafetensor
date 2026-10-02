@@ -1,0 +1,21 @@
+name: toolchain
+description: Install the pinned nightly from rust-toolchain.toml, the cross tools gate 3 needs, and a build cache. Sets no RUSTFLAGS.
+inputs:
+  cross:
+    description: Install QEMU user mode and the AArch64 cross linker
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        rustup toolchain install --no-self-update 2>/dev/null || rustup show
+        rustc --version
+        sysroot="$(rustc --print sysroot)"
+        echo "$sysroot/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin" >> "$GITHUB_PATH"
+    - if: inputs.cross == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -yq qemu-user-static gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+    - uses: Swatinem/rust-cache@v2

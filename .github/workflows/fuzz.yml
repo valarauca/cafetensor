@@ -1,0 +1,46 @@
+# Nightly fuzzing. Each target gets one job under the 90 minute cap; the corpus is carried
+# between runs through the actions cache, and crashes are uploaded as artifacts. Longer
+# campaigns run off GitHub.
+name: fuzz
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target
+        default: "4500"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [decode_tensor, roundtrip_tensor, tiers_agree]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 88
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - run: scripts/fuzz.sh "${{ inputs.seconds || '4500' }}" ${{ matrix.target }}
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}

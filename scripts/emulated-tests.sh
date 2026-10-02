@@ -25,8 +25,11 @@ run_row() {  # name expect runner-json target
     echo "$name: $expect (dev, release)"
 }
 
+# The native row expects the reference 9800X3D. CAFETENSOR_NATIVE_TIER names another host's tier,
+# or `any` on hosted CI runners whose CPU is not known in advance.
 native="$(cargo run -q -p cafetensor-bin 2>&1 >/dev/null | sed 's/^cafetensor: tier //')"
 expect_native="${CAFETENSOR_NATIVE_TIER:-amd64_9800x3d}"
+[ "$expect_native" = any ] && expect_native="$native"
 [ "$native" = "$expect_native" ] || { echo "gate 3: FAIL: native selected $native, expected $expect_native"; exit 1; }
 run_row native "$expect_native" "" x86_64-unknown-linux-gnu
 

@@ -14,7 +14,7 @@ members = [
     "platform/amd64_ia64/9800x3d",
     "platform/os_specific/os_common",
     "testkit",
-    # "fuzz",  # Phase 5; never a default member
+    "fuzz",  # never a default member
 ]
 default-members = ["cafetensor-bin"]
 
@@ -46,6 +46,8 @@ blake3      = { version = "1.8.7", features = ["mmap", "rayon"] }
 anamnesis   = "0.6.9"
 clap        = { version = "4.6.7", features = ["derive"] }
 memmap2     = "0.9.11"
+# fuzz only
+libfuzzer-sys = "0.4"
 rayon       = "1.12.0"
 # Every third-party dependency used by any member is declared here and
 # referenced from members as `{ workspace = true }`.

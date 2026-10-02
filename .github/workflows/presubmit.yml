@@ -1,0 +1,103 @@
+# Presubmit: the verification gates that can run on hosted runners, plus native AArch64 Linux
+# and macOS runs and a short fuzz smoke. Gate 6 (comparison with the old project) needs the old
+# tree and local checkpoints, so it stays local. Every job stays well under the 90 minute cap.
+name: presubmit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: presubmit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  lint:
+    name: fmt and clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - run: scripts/lint.sh
+
+  audits:
+    name: gates 1, 2 and 5 (flags, public surface, disassembly)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-public-api
+      - run: scripts/audit-flags.sh
+      - run: scripts/audit-public-api.sh
+      - run: scripts/audit-disasm.sh | tail -1; exit "${PIPESTATUS[0]}"
+
+  hosts:
+    name: gate 3 (native, QEMU x86-64 models, QEMU AArch64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+        with:
+          cross: true
+      - name: native row accepts the runner's CPU, QEMU rows as in verify.sh
+        env:
+          CAFETENSOR_NATIVE_TIER: any
+        run: scripts/emulated-tests.sh
+
+  tests:
+    name: gate 4 (sample tests on every tier the runner has)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - run: scripts/sample-tests.sh
+
+  native:
+    name: native ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: AArch64 Linux
+            os: ubuntu-24.04-arm
+          - name: macOS (Apple silicon)
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - run: cargo test -q --release -p general_backend -p cafetensor-lib -p cafetensor-testkit
+      - name: smoke run selects portable
+        run: |
+          out="$(cargo run -q --release -p cafetensor-bin 2>&1 >/dev/null)"
+          echo "$out"
+          grep -qx 'cafetensor: tier portable' <<<"$out"
+
+  fuzz-smoke:
+    name: fuzz smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - run: scripts/fuzz.sh 60
