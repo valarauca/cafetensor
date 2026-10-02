@@ -2,24 +2,28 @@
 //!
 //! [`Hasher`] keeps the reference implementation's stack of subtree chaining values. Large
 //! inputs are cut into the biggest aligned power-of-two subtrees that leave at least one byte
-//! for later, and each subtree is hashed in parallel halves on the rayon pool through
-//! `Operations::blake3_subtree` and `Operations::blake3_parent`. The last chunk stays buffered
-//! until more input arrives, because it may turn out to be the root.
+//! for later. Every subtree of one update is hashed at once on the rayon pool, in 256 KiB
+//! leaves through `Operations::blake3_subtree`, and its parent levels are merged through
+//! `Operations::blake3_parent`. The last chunk stays buffered until more input arrives,
+//! because it may turn out to be the root.
 
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::mpsc::sync_channel;
 
 use general_backend::blake3::{CHUNK_LEN, OUT_LEN};
+use rayon::prelude::*;
 
-use crate::{Error, ops};
+use crate::{Error, HugeBuf, ops};
 
 /// Prefix of a hash in the container's notation.
 pub const HASH_PREFIX: &str = "blake3-";
-/// Subtrees at most this long are hashed by one task.
-const TASK_LEN: usize = 1 << 17;
-/// Bytes read per `read` call by [`b3sum`].
-const READ_LEN: usize = 1 << 26;
+/// Subtree hashed by one task: big enough that a call runs near full speed, small enough that
+/// a few-MiB tensor still spreads over the pool.
+const LEAF: usize = 1 << 18;
+/// Bytes [`b3sum`] reads per buffer.
+const READ_LEN: usize = 1 << 24;
 
 /// Incremental BLAKE3 hasher.
 #[derive(Clone)]
@@ -41,17 +45,26 @@ impl Default for Hasher {
     }
 }
 
-/// Chaining value of a complete power-of-two subtree whose first chunk is chunk `counter`.
+/// Chaining value of a complete power-of-two subtree whose first chunk is chunk `counter`:
+/// leaves on the rayon pool, then the parent levels in order.
 fn subtree(data: &[u8], counter: u64) -> [u8; OUT_LEN] {
-    if data.len() <= TASK_LEN {
+    if data.len() <= LEAF {
         return ops().blake3_subtree(data, counter);
     }
-    let half = data.len() / 2;
-    let (l, r) = rayon::join(
-        || subtree(&data[..half], counter),
-        || subtree(&data[half..], counter + (half / CHUNK_LEN) as u64),
-    );
-    ops().blake3_parent(&l, &r, false)
+    let mut cvs: Vec<[u8; OUT_LEN]> = data
+        .par_chunks(LEAF)
+        .enumerate()
+        .map(|(i, leaf)| ops().blake3_subtree(leaf, counter + (i * LEAF / CHUNK_LEN) as u64))
+        .collect();
+    while cvs.len() > 1 {
+        cvs = cvs
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[l, r]| ops().blake3_parent(l, r, false))
+            .collect();
+    }
+    cvs[0]
 }
 
 impl Hasher {
@@ -90,16 +103,26 @@ impl Hasher {
             self.buf_len = 0;
             self.push(cv, 1);
         }
-        while input.len() > CHUNK_LEN {
-            let mut chunks = 1u64 << ((input.len() - 1) / CHUNK_LEN).ilog2();
-            while !self.chunks.is_multiple_of(chunks) {
+        let mut pieces = Vec::new();
+        let (mut at, mut counter) = (0, self.chunks);
+        while input.len() - at > CHUNK_LEN {
+            let mut chunks = 1u64 << ((input.len() - at - 1) / CHUNK_LEN).ilog2();
+            while !counter.is_multiple_of(chunks) {
                 chunks /= 2;
             }
             let len = chunks as usize * CHUNK_LEN;
-            let cv = subtree(&input[..len], self.chunks);
-            self.push(cv, chunks);
-            input = &input[len..];
+            pieces.push((at, len, counter));
+            at += len;
+            counter += chunks;
         }
+        let cvs: Vec<[u8; OUT_LEN]> = pieces
+            .par_iter()
+            .map(|&(at, len, counter)| subtree(&input[at..at + len], counter))
+            .collect();
+        for (&(_, len, _), cv) in pieces.iter().zip(cvs) {
+            self.push(cv, (len / CHUNK_LEN) as u64);
+        }
+        input = &input[at..];
         self.buf[..input.len()].copy_from_slice(input);
         self.buf_len = input.len();
         self
@@ -130,23 +153,50 @@ pub fn hash(data: &[u8]) -> [u8; OUT_LEN] {
     Hasher::new().update(data).finalize()
 }
 
-/// BLAKE3 of a file in the container's notation, read sequentially and hashed in parallel.
+/// BLAKE3 of a file in the container's notation. One thread reads the file sequentially into
+/// two alternating huge-page buffers while the rayon pool hashes the other.
 pub fn b3sum(path: &Path) -> Result<String, Error> {
     let mut f = File::open(path)?;
-    let mut h = Hasher::new();
-    let mut buf = vec![0u8; READ_LEN];
-    loop {
-        let mut filled = 0;
-        while filled < buf.len() {
-            match f.read(&mut buf[filled..])? {
-                0 => break,
-                k => filled += k,
-            }
-        }
-        h.update(&buf[..filled]);
-        if filled < buf.len() {
-            break;
-        }
+    let (full_tx, full_rx) = sync_channel::<std::io::Result<(HugeBuf, usize)>>(1);
+    let (free_tx, free_rx) = sync_channel::<HugeBuf>(2);
+    for _ in 0..2 {
+        let mut buf = HugeBuf::new();
+        buf.resize(READ_LEN)?;
+        let _ = free_tx.send(buf);
     }
-    Ok(hash_string(&h.finalize()))
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            for mut buf in free_rx {
+                let mut filled = 0;
+                let result = buf.resize(READ_LEN).and_then(|dst| {
+                    while filled < dst.len() {
+                        match f.read(&mut dst[filled..])? {
+                            0 => break,
+                            k => filled += k,
+                        }
+                    }
+                    Ok(())
+                });
+                if let Err(e) = result {
+                    let _ = full_tx.send(Err(e));
+                    return;
+                }
+                let last = filled < READ_LEN;
+                if full_tx.send(Ok((buf, filled))).is_err() || last {
+                    return;
+                }
+            }
+        });
+        let mut h = Hasher::new();
+        for msg in full_rx {
+            let (buf, filled) = msg?;
+            h.update(&buf.as_slice()[..filled]);
+            if filled < READ_LEN {
+                break;
+            }
+            let _ = free_tx.send(buf);
+        }
+        drop(free_tx);
+        Ok(hash_string(&h.finalize()))
+    })
 }

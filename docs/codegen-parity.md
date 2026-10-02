@@ -141,3 +141,18 @@ Single thread, GB/s. The old project hashed with the `blake3` crate (its AVX-512
 The AVX-512 tiers are 7 to 16% faster than the crate's assembly. The crate's AVX2 and SSE4.1 paths cannot be selected on this host, so `amd64_v3`, `amd64_v2` and `portable` have no measured old counterpart yet.
 
 Main loop of the 16-lane batch (`llvm-objdump`): about 970 to 1,140 instructions per 16-chunk block step on the AVX-512 tiers, against 870 to 1,290 in the crate's `blake3_hash_many_avx512`.
+
+## End to end: `cafetensor` against `tcz`
+
+`scripts/compare-old.sh e2e` builds the old `tcz` with the old project's own toolchain into a temporary directory and runs both binaries with `-j 2` on the local checkpoints. Every compressed container is byte-identical to the old one, each tool's `--verify` decompression of the other's container restores the input byte for byte, and both `b3sum` digests agree. The two-shard Qwen3-VL-8B-Thinking-FP8 container is also identical and restores both shards. Wall times are the best of two runs per tool, on the 9800X3D (`amd64_9800x3d`):
+
+| Checkpoint | Bytes | Ratio | Old compress s | New compress s | Old decompress s | New decompress s | Old b3sum s | New b3sum s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Qwen3.5-27B shard 2 (BF16) | 5,347,741,440 | 0.6605 | 10.33 | 6.82 | 1.97 | 2.02 | 0.45 | 0.27 |
+| SAM 2.1 large (F32) | 897,897,416 | 0.8335 | 1.50 | 0.88 | 0.25 | 0.24 | 0.08 | 0.06 |
+| SDXL UNet (F16) | 5,135,149,760 | 0.8471 | 12.29 | 6.43 | 1.52 | 1.50 | 0.42 | 0.26 |
+| Qwen3-VL-8B-Thinking-FP8 shard 2 (FP8, BF16, F32) | 5,226,891,960 | 0.7963 | 15.85 | 9.84 | 2.14 | 2.12 | 0.37 | 0.23 |
+| Wan2.2 TI2V 5B (FP8 E5M2, F32) | 5,277,255,650 | 0.7053 | 16.79 | 10.00 | 1.84 | 1.81 | 0.34 | 0.23 |
+| Grounding DINO base (F32, I64) | 933,400,872 | 0.8299 | 1.46 | 0.89 | 0.28 | 0.27 | 0.08 | 0.05 |
+
+Compression is 34 to 48% faster, from the parallel plane split and histogram and the faster encoder. Decompression with `--verify` (decode, BLAKE3 of the output, file write) is within 3% either way, since writing the restored file dominates once decoding runs at 8 GB/s or more on two threads. `b3sum` is 25 to 40% faster: the old tool hashed a memory map, the new one reads into two 16 MiB huge-page buffers that stay in cache while the pool hashes them.

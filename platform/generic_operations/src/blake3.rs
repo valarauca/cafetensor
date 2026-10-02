@@ -245,7 +245,8 @@ fn lanes<const N: usize>(h: &[Simd<u32, N>; 8], out: &mut [[u32; 8]]) {
     }
 }
 
-/// Chaining values of `N` whole consecutive chunks, the first being chunk `counter`.
+/// Chaining values of up to `N` whole consecutive chunks, the first being chunk `counter`.
+/// Missing lanes repeat the last chunk and their results are dropped.
 #[inline(always)]
 fn chunks_lanes<const N: usize>(data: &[[u8; CHUNK_LEN]], counter: u64, out: &mut [[u32; 8]]) {
     let counter = [
@@ -257,7 +258,7 @@ fn chunks_lanes<const N: usize>(data: &[[u8; CHUNK_LEN]], counter: u64, out: &mu
     let mut h = IV.map(Simd::splat);
     for b in 0..CHUNK_LEN / BLOCK_LEN {
         let rows: [Simd<u32, N>; 16] = core::array::from_fn(|k| {
-            let block = data[k % N].as_chunks::<BLOCK_LEN>().0[b];
+            let block = data[(k % N).min(data.len() - 1)].as_chunks::<BLOCK_LEN>().0[b];
             let mut v = u32x16::from_le_bytes(u8x64::from_array(block));
             for _ in 0..k / N * N / 4 {
                 v = v.rotate_elements_left::<4>();
@@ -303,13 +304,12 @@ fn batch_cv<K: Kernels, const N: usize>(data: &[u8], counter: u64) -> [u32; 8] {
     let mut cvs = [[0u32; 8]; BATCH];
     let (whole, tail) = data.as_chunks::<CHUNK_LEN>();
     let mut n = 0;
-    for group in whole.as_chunks::<N>().0 {
-        chunks_lanes::<N>(group.as_slice(), counter + n as u64, &mut cvs[n..n + N]);
-        n += N;
-    }
-    for c in &whole[n..] {
-        cvs[n] = chunk_cv::<K>(c, counter + n as u64, false);
-        n += 1;
+    for group in whole.chunks(N) {
+        match group {
+            [c] => cvs[n] = chunk_cv::<K>(c, counter + n as u64, false),
+            _ => chunks_lanes::<N>(group, counter + n as u64, &mut cvs[n..n + group.len()]),
+        }
+        n += group.len();
     }
     if !tail.is_empty() || n == 0 {
         cvs[n] = chunk_cv::<K>(tail, counter + n as u64, false);

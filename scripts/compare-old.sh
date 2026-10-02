@@ -41,28 +41,37 @@ if [ "$op" = e2e ]; then
     old_bin="$tmp/old-target/release/tcz"
     new_bin="$NEW/target/release/cafetensor"
     now() { date +%s.%N; }
-    secs() { python3 -c "print(f'{$2 - $1:.2f}')"; }
+    # Best of two runs per tool, alternating old and new, so page cache and write-back state
+    # favour neither. Prints the best wall time in seconds.
+    best() {
+        local which="$1"; shift
+        local t0 t1 b=1e9
+        for _ in 1 2; do
+            t0=$(now); "$@" >/dev/null 2>&1 || { echo "$which failed: $*" >&2; exit 1; }; t1=$(now)
+            b=$(python3 -c "print(min($b, $t1 - $t0))")
+        done
+        python3 -c "print(f'{$b:.2f}')"
+    }
     echo "| checkpoint | bytes | ratio | identical | old compress s | new compress s | old decompress s | new decompress s | old b3sum s | new b3sum s |"
     echo "|---|---|---|---|---|---|---|---|---|---|"
     for f in "$@"; do
         [ -f "$f" ] || { echo "missing checkpoint $f" >&2; exit 1; }
         name="$(basename "$f")"
-        t0=$(now); "$old_bin" -j "$jobs" compress "$f" -o "$tmp/old.cafetensor" >/dev/null
-        t1=$(now); "$new_bin" -j "$jobs" compress "$f" -o "$tmp/new.cafetensor" >/dev/null 2>&1
-        t2=$(now)
+        oc=$(best old "$old_bin" -j "$jobs" compress "$f" -o "$tmp/old.cafetensor")
+        nc=$(best new "$new_bin" -j "$jobs" compress "$f" -o "$tmp/new.cafetensor")
         cmp -s "$tmp/old.cafetensor" "$tmp/new.cafetensor" || { echo "containers differ for $f" >&2; exit 1; }
-        t3=$(now); "$old_bin" -j "$jobs" decompress "$tmp/new.cafetensor" -o "$tmp/by-old.safetensors" --verify >/dev/null
-        t4=$(now); "$new_bin" -j "$jobs" decompress "$tmp/old.cafetensor" -o "$tmp/by-new.safetensors" --verify >/dev/null 2>&1
-        t5=$(now)
+        od=$(best old "$old_bin" -j "$jobs" decompress "$tmp/new.cafetensor" -o "$tmp/by-old.safetensors" --verify --force)
+        nd=$(best new "$new_bin" -j "$jobs" decompress "$tmp/old.cafetensor" -o "$tmp/by-new.safetensors" --verify --force)
         cmp -s "$f" "$tmp/by-old.safetensors" || { echo "old tcz restored $f wrongly" >&2; exit 1; }
         cmp -s "$f" "$tmp/by-new.safetensors" || { echo "cafetensor restored $f wrongly" >&2; exit 1; }
-        t6=$(now); want="$("$old_bin" -j "$jobs" b3sum "$f" | cut -d' ' -f1)"
-        t7=$(now); got="$("$new_bin" -j "$jobs" b3sum "$f" 2>/dev/null | cut -d' ' -f1)"
-        t8=$(now)
+        want="$("$old_bin" -j "$jobs" b3sum "$f" | cut -d' ' -f1)"
+        got="$("$new_bin" -j "$jobs" b3sum "$f" 2>/dev/null | cut -d' ' -f1)"
         [ "$want" = "$got" ] || { echo "b3sum differs for $f" >&2; exit 1; }
-        bytes=$(stat -c %s "$f")
+        ob=$(best old "$old_bin" -j "$jobs" b3sum "$f")
+        nb=$(best new "$new_bin" -j "$jobs" b3sum "$f")
+        bytes=$(stat -L -c %s "$f")
         ratio=$(python3 -c "print(f'{$(stat -c %s "$tmp/new.cafetensor") / $bytes:.4f}')")
-        echo "| $name | $bytes | $ratio | yes | $(secs $t0 $t1) | $(secs $t1 $t2) | $(secs $t3 $t4) | $(secs $t4 $t5) | $(secs $t6 $t7) | $(secs $t7 $t8) |"
+        echo "| $name | $bytes | $ratio | yes | $oc | $nc | $od | $nd | $ob | $nb |"
         rm -f "${tmp:?}"/*.cafetensor "${tmp:?}"/*.safetensors
     done
     shards=()
