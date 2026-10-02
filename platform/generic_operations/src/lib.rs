@@ -29,13 +29,53 @@ pub trait Kernels: 'static {
     /// which is faster depends on the tier (see docs/codegen-parity.md).
     const ENCODE_BRANCHLESS: bool = false;
 
-    /// Decode as many leading elements of a chunk as this tier can with vector code, in whole
-    /// groups, and return how many; the scalar path decodes the rest. The default decodes
-    /// nothing.
+    /// Flat decode entries ([`codebook::ExpAlias::flat`]) of 16 exponent slots, each below
+    /// `1 << EXP_BITS`, for an alias table of `N` buckets.
     #[inline(always)]
-    fn decode_groups(t: &decode::DecTables, st: &mut decode::ChunkState, out: &mut [u8]) -> usize {
-        let _ = (t, st, out);
-        0
+    fn exp_entries<const N: usize>(t: &decode::DecTables, slot: u32x16) -> u32x16 {
+        u32x16::gather_or_default(&t.exp, slot.cast())
+    }
+
+    /// Lanes below `RANS_L` shift left by 16 and take the next words of `words` in lane order.
+    /// Returns the new states and the number of words taken.
+    #[inline(always)]
+    fn refill(x: u32x16, words: &[u8; 32]) -> (u32x16, usize) {
+        decode::refill_shuffle::<Self>(x, words)
+    }
+
+    /// Byte shuffle: lane `i` takes `v[idx[i]]` when `idx[i] < 16`, and zero when
+    /// `idx[i] >= 0x80`.
+    #[inline(always)]
+    fn shuffle_bytes(v: u8x16, idx: u8x16) -> u8x16 {
+        v.swizzle_dyn(idx)
+    }
+
+    /// Sign|mantissa table offset (`ctx << SM_BITS`) of each lane's exponent byte.
+    #[inline(always)]
+    fn sm_bases(t: &decode::DecTables, exp: u32x16) -> u32x16 {
+        u32x16::gather_or_default(&t.sm_base, exp.cast())
+    }
+
+    /// Sign|mantissa decode entries of 16 slots below `MAX_CTX << SM_BITS`.
+    #[inline(always)]
+    fn sm_entries(t: &decode::DecTables, slot: u32x16) -> u32x16 {
+        u32x16::gather_or_default(&t.sm, slot.cast())
+    }
+
+    /// Replace the lanes of `exp` set in `m` with the bytes of `esc` in lane order. `esc` holds
+    /// `m.count_ones()` bytes.
+    #[inline(always)]
+    fn escapes(exp: u32x16, m: u16, esc: &[u8]) -> u32x16 {
+        let mut v = exp.to_array();
+        let mut bytes = esc.iter();
+        for (l, x) in v.iter_mut().enumerate() {
+            if (m >> l) & 1 == 1
+                && let Some(&b) = bytes.next()
+            {
+                *x = b as u32;
+            }
+        }
+        u32x16::from_array(v)
     }
 
     /// `out = a ^ b` over one 64-byte block.

@@ -185,22 +185,37 @@ fn small_chunks_and_escapes() {
         Format::E4M3,
         Format::E5M2,
     ] {
-        for n in [1usize, 15, 16, 17, 63, 64, 65, 127, 128, 129, 1000] {
+        for n in [1usize, 15, 16, 17, 63, 64, 65, 127, 128, 129, 1000, 50_000] {
             for wide in [false, true] {
-                let bytes: Vec<u8> = (0..n * fmt.width)
-                    .map(|i| {
-                        if wide || i % fmt.width != fmt.width - 1 {
-                            next() as u8
+                let emask = (1u64 << fmt.exp_bits()) - 1;
+                let hmask = (1u64 << fmt.hi_bits()) - 1;
+                let lmask = (1u64 << (8 * fmt.low_bytes())) - 1;
+                let bytes: Vec<u8> = (0..n)
+                    .flat_map(|_| {
+                        let r = next();
+                        let exp = if wide {
+                            (r % 200) & emask
                         } else {
-                            0x3F + (next() % 3) as u8
-                        }
+                            emask / 2 - r % 3
+                        };
+                        let v = fmt.join(
+                            exp as u8,
+                            ((r >> 16) & hmask) as u8,
+                            ((r >> 32) & lmask) as u32,
+                        );
+                        v.to_le_bytes()[..fmt.width].to_vec()
                     })
                     .collect();
                 for mode in [SmMode::Raw, SmMode::Coded] {
-                    let t = encode(fmt, &bytes, mode, 64);
+                    let t = encode(fmt, &bytes, mode, if n > 1000 { 1 << 14 } else { 64 });
                     for tier in available() {
                         let mut out = vec![0u8; bytes.len()];
-                        decode(tier, &t, &mut out).unwrap();
+                        decode(tier, &t, &mut out).unwrap_or_else(|e| {
+                            panic!(
+                                "{} {fmt:?} n={n} wide={wide} {mode:?}: {e:?}",
+                                tier.tier_name()
+                            )
+                        });
                         assert_eq!(
                             out,
                             bytes,

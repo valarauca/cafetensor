@@ -6,6 +6,7 @@
 //! proves is enabled for this whole crate, and loads or stores only within the arrays passed
 //! to the hook.
 #![no_std]
+#![feature(portable_simd)]
 #![cfg(target_arch = "x86_64")]
 
 // Flag guard, the one permitted use of cfg(target_feature) in a tier crate. It fails the build
@@ -30,6 +31,9 @@
 )))]
 compile_error!("amd64_v3 was built without its tier flags; see cafetensor-lib/README.md");
 
+use core::arch::x86_64::*;
+use core::simd::u8x16;
+
 use generic_operations::{Engine, Kernels, Operations};
 
 /// Private on purpose. A crate that can name this type can instantiate generics against it at
@@ -39,7 +43,6 @@ struct V3;
 impl Kernels for V3 {
     #[inline(always)]
     fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {
-        use core::arch::x86_64::*;
         for i in 0..2 {
             let at = 32 * i;
             unsafe {
@@ -53,8 +56,13 @@ impl Kernels for V3 {
     }
 
     #[inline(always)]
+    fn shuffle_bytes(v: u8x16, idx: u8x16) -> u8x16 {
+        unsafe { _mm_shuffle_epi8(v.into(), idx.into()).into() }
+    }
+
+    #[inline(always)]
     fn crc32c_u64(state: u32, word: u64) -> u32 {
-        unsafe { core::arch::x86_64::_mm_crc32_u64(state as u64, word) as u32 }
+        unsafe { _mm_crc32_u64(state as u64, word) as u32 }
     }
 }
 

@@ -6,6 +6,7 @@
 //! proves is enabled for this whole crate, and loads or stores only within the arrays passed
 //! to the hook.
 #![no_std]
+#![feature(portable_simd)]
 #![cfg(target_arch = "x86_64")]
 
 // Flag guard, the one permitted use of cfg(target_feature) in a tier crate. It fails the build
@@ -20,6 +21,8 @@
     target_feature = "ssse3"
 )))]
 compile_error!("amd64_v2 was built without its tier flags; see cafetensor-lib/README.md");
+
+use core::simd::u8x16;
 
 use generic_operations::{Engine, Kernels, Operations};
 
@@ -41,6 +44,11 @@ impl Kernels for V2 {
                 _mm_storeu_si128(out[at..].as_mut_ptr().cast(), r);
             }
         }
+    }
+
+    #[inline(always)]
+    fn shuffle_bytes(v: u8x16, idx: u8x16) -> u8x16 {
+        unsafe { core::arch::x86_64::_mm_shuffle_epi8(v.into(), idx.into()).into() }
     }
 
     #[inline(always)]

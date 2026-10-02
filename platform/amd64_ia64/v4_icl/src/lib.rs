@@ -6,6 +6,7 @@
 //! proves is enabled for this whole crate, and loads or stores only within the arrays passed
 //! to the hook.
 #![no_std]
+#![feature(portable_simd)]
 #![cfg(target_arch = "x86_64")]
 
 // Flag guard, the one permitted use of cfg(target_feature) in a tier crate. It fails the build
@@ -39,6 +40,12 @@
 )))]
 compile_error!("amd64_v4_icl was built without its tier flags; see cafetensor-lib/README.md");
 
+use core::arch::x86_64::*;
+use core::simd::u32x16;
+
+use generic_operations::codebook::{EXP_BITS, MAX_CTX, SM_BITS};
+use generic_operations::decode::DecTables;
+use generic_operations::rans::RANS_L;
 use generic_operations::{Engine, Kernels, Operations};
 
 /// Private on purpose. A crate that can name this type can instantiate generics against it at
@@ -50,7 +57,6 @@ impl Kernels for V4Icl {
 
     #[inline(always)]
     fn xor64(a: &[u8; 64], b: &[u8; 64], out: &mut [u8; 64]) {
-        use core::arch::x86_64::*;
         unsafe {
             let r = _mm512_xor_si512(
                 _mm512_loadu_si512(a.as_ptr().cast()),
@@ -62,12 +68,11 @@ impl Kernels for V4Icl {
 
     #[inline(always)]
     fn crc32c_u64(state: u32, word: u64) -> u32 {
-        unsafe { core::arch::x86_64::_mm_crc32_u64(state as u64, word) as u32 }
+        unsafe { _mm_crc32_u64(state as u64, word) as u32 }
     }
 
     #[inline(always)]
     fn crc32c_blocks(state: u32, blocks: &[[u8; 256]]) -> u32 {
-        use core::arch::x86_64::*;
         use generic_operations::crc::{K128, K512, K2048};
         let Some((first, rest)) = blocks.split_first() else {
             return state;
@@ -123,6 +128,94 @@ impl Kernels for V4Icl {
             }
             let c = _mm_crc32_u64(0, _mm_cvtsi128_si64(r) as u64);
             _mm_crc32_u64(c, _mm_extract_epi64::<1>(r) as u64) as u32
+        }
+    }
+
+    #[inline(always)]
+    fn exp_entries<const N: usize>(t: &DecTables, slot: u32x16) -> u32x16 {
+        let shift = EXP_BITS - N.trailing_zeros();
+        let b: __m512i = (slot >> shift).into();
+        let j = slot & u32x16::splat((1 << shift) - 1);
+        let e: u32x16 = unsafe {
+            let div = _mm512_loadu_si512(t.alias.div.as_ptr().cast());
+            let div = _mm512_and_si512(_mm512_permutexvar_epi8(b, div), _mm512_set1_epi32(0xFF));
+            let side = _mm512_cmpge_epu32_mask(j.into(), div);
+            _mm512_mask_blend_epi32(
+                side,
+                lookup::<N>(&regs(&t.alias.lo), b),
+                lookup::<N>(&regs(&t.alias.hi), b),
+            )
+        }
+        .into();
+        let k = (j + (e >> 20)) & u32x16::splat((1 << EXP_BITS) - 1);
+        (e & u32x16::splat(0xF_FFFF)) | (k << 20)
+    }
+
+    #[inline(always)]
+    fn refill(x: u32x16, words: &[u8; 32]) -> (u32x16, usize) {
+        let x: __m512i = x.into();
+        unsafe {
+            let k = _mm512_cmplt_epu32_mask(x, _mm512_set1_epi32(RANS_L as i32));
+            let w = _mm512_cvtepu16_epi32(_mm256_loadu_si256(words.as_ptr().cast()));
+            let w = _mm512_maskz_expand_epi32(k, w);
+            let x = _mm512_mask_or_epi32(x, k, _mm512_slli_epi32::<16>(x), w);
+            (x.into(), k.count_ones() as usize)
+        }
+    }
+
+    #[inline(always)]
+    fn sm_bases(t: &DecTables, exp: u32x16) -> u32x16 {
+        let c = t.ctx_of.as_chunks::<64>().0;
+        let e: __m512i = exp.into();
+        let ctx: u32x16 = unsafe {
+            let r = |i: usize| _mm512_loadu_si512(c[i].as_ptr().cast());
+            let lo = _mm512_permutex2var_epi8(r(0), e, r(1));
+            let hi = _mm512_permutex2var_epi8(r(2), e, r(3));
+            let upper = _mm512_test_epi32_mask(e, _mm512_set1_epi32(0x80));
+            _mm512_mask_blend_epi32(upper, lo, hi)
+        }
+        .into();
+        (ctx & u32x16::splat(MAX_CTX as u32 - 1)) << SM_BITS
+    }
+
+    #[inline(always)]
+    fn sm_entries(t: &DecTables, slot: u32x16) -> u32x16 {
+        let i: __m512i = (slot & u32x16::splat(t.sm.len() as u32 - 1)).into();
+        unsafe { _mm512_i32gather_epi32::<4>(i, t.sm.as_ptr().cast()).into() }
+    }
+
+    #[inline(always)]
+    fn escapes(exp: u32x16, m: u16, esc: &[u8]) -> u32x16 {
+        if esc.len() < m.count_ones() as usize {
+            return exp;
+        }
+        unsafe {
+            let real = _mm512_cvtepu8_epi32(_mm_maskz_expandloadu_epi8(m, esc.as_ptr().cast()));
+            _mm512_mask_mov_epi32(exp.into(), m, real).into()
+        }
+    }
+}
+
+/// Four registers of a 64-entry table.
+#[inline(always)]
+fn regs(v: &[u32; 64]) -> [__m512i; 4] {
+    let c = v.as_chunks::<16>().0;
+    core::array::from_fn(|i| unsafe { _mm512_loadu_si512(c[i].as_ptr().cast()) })
+}
+
+/// Look up an `N`-entry `u32` table held in registers, `N` in {16, 32, 64}.
+#[inline(always)]
+fn lookup<const N: usize>(t: &[__m512i; 4], b: __m512i) -> __m512i {
+    unsafe {
+        match N {
+            16 => _mm512_permutexvar_epi32(b, t[0]),
+            32 => _mm512_permutex2var_epi32(t[0], b, t[1]),
+            _ => {
+                let upper = _mm512_test_epi32_mask(b, _mm512_set1_epi32(32));
+                let lo = _mm512_permutex2var_epi32(t[0], b, t[1]);
+                let hi = _mm512_permutex2var_epi32(t[2], b, t[3]);
+                _mm512_mask_blend_epi32(upper, lo, hi)
+            }
         }
     }
 }

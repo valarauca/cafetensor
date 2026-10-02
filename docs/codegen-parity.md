@@ -90,3 +90,38 @@ Single thread, G elements/s (old forced to one thread):
 | F8_E5M2 (Wan) | raw | 0.36 | 0.46 | 0.49 | 0.49 | 0.39 | 0.36 | 0.36 |
 
 The worst case is the low-entropy Qwen3-VL F32 sample on `amd64_9800x3d`, 4% below the old encoder (within the 5% rule). Encoding stays scalar per lane on every tier; a vectorized 16-lane encoder is a candidate for later work.
+
+## decode_chunk
+
+Output: decoding the old encoder's streams of every 1 Mi-element chunk reproduces every float profile sample (256 MiB each) exactly, raw and coded, on every tier, as does the old decoder. Tests also round-trip chunk sizes 1 to 1 Mi elements at unaligned output offsets, escape-heavy BF16 and F32, every format at 1 to 50,000 elements, and reject corrupted streams and wrong output lengths with an error, never a panic.
+
+The decoder is one generic loop over whole lines of 4 ways × 16 lanes, specialized like the old one by format, sign|mantissa mode, alias tier and escape use, followed by the scalar path for the tail. Tier hooks (see DECISIONS.md):
+
+| Hook | portable | v2 | v3 | v4 | v4_icl, 9800x3d |
+| --- | --- | --- | --- | --- | --- |
+| exponent entries | flat table | flat table | flat table | alias in registers, `vpermi2d` dividers | alias in registers, `vpermb` dividers |
+| refill | table `swizzle_dyn` | table `pshufb` | table `pshufb` | `vpexpandd` | `vpexpandd` |
+| context | table | table | table | packed nibbles, `vpermi2d` | `vpermi2b` |
+| sign\|mantissa entries | table | table | table | `vpgatherdd` | `vpgatherdd` |
+| escapes | scalar | scalar | scalar | scalar | `vpexpandb` |
+
+Single thread, GB/s of decoded output, best of five:
+
+| Sample | Mode | Old | 9800x3d | v4_icl | v4 | v3 | v2 | portable |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| BF16 (Qwen3.5, Qwen3-VL) | raw | 11.18 to 11.30 | 11.33 to 11.39 | 11.37 to 11.42 | 11.51 | 4.11 to 4.12 | 3.03 to 3.04 | 0.64 to 0.65 |
+| BF16 (Qwen3.5, Qwen3-VL) | coded | 3.04 to 3.07 | 4.02 to 4.03 | 4.02 to 4.05 | 3.97 to 4.02 | 1.42 | 1.24 to 1.25 | 0.24 to 0.25 |
+| F32 (SAM, Grounding DINO, Wan, Qwen3-VL) | raw | 14.02 to 16.15 | 15.33 to 16.00 | 15.89 to 16.03 | 15.86 to 16.34 | 7.36 to 7.44 | 5.62 to 5.67 | 1.20 to 1.75 |
+| F32 (SAM, Grounding DINO, Wan, Qwen3-VL) | coded | 5.69 to 6.26 | 6.85 to 7.53 | 6.91 to 7.60 | 6.94 to 7.97 | 2.72 to 2.85 | 2.39 to 2.51 | 0.49 to 0.52 |
+| F16 (SDXL) | raw | 8.00 | 9.19 | 9.15 | 9.71 | 3.41 | 2.42 | 0.62 |
+| F8_E4M3 / F8_E5M2 | raw | 3.97 to 4.33 | 4.56 to 4.94 | 4.53 to 4.94 | 4.78 to 5.24 | 1.65 to 1.75 | 1.17 to 1.28 | 0.30 to 0.31 |
+
+The old decoder ran only on VBMI2 hosts and fell back to its scalar path elsewhere (about 0.5 GB/s for BF16), so the old column is the comparable path for the three AVX-512 tiers only. Those match it on BF16 raw and on the Qwen3-VL F32 sample (within 1%) and beat it everywhere else, by 10 to 33%. `amd64_9800x3d` and `amd64_v4_icl` decode within 2% of each other; the tuning comparison is in DECISIONS.md.
+
+Main loop size (instructions in the largest loop of the instantiation, `llvm-objdump`):
+
+| Instantiation | Old | 9800x3d | v4_icl | v4 |
+| --- | --- | --- | --- | --- |
+| BF16 raw, 64 buckets | 287 | 239 | 237 | 245 |
+| BF16 coded, 64 buckets | 184 | 144 | 143 | 141 |
+| F8_E4M3 raw, 16 buckets | 150 | 127 | 126 | 124 |

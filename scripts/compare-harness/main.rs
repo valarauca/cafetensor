@@ -241,6 +241,122 @@ fn encode(tiers: &[&'static dyn Operations]) {
     }
 }
 
+/// One chunk encoded by the old encoder, with its raw planes, as the old container stores it.
+struct OldChunk {
+    elems: usize,
+    exp: [Vec<u8>; 4],
+    sm: [Vec<u8>; 4],
+    esc: [Vec<u8>; 4],
+    hi: Vec<u8>,
+    bits: Vec<u8>,
+    lo: Vec<u8>,
+}
+
+fn words(v: &[u16]) -> Vec<u8> {
+    v.iter().flat_map(|w| w.to_le_bytes()).collect()
+}
+
+/// The old project's per-chunk decode (`tensor.rs`): AVX-512 lines when available, then the
+/// scalar tail.
+#[inline(never)]
+fn old_decode(t: &tensor_compressor::codec::DecTables, fmt: tensor_compressor::codec::Format, c: &OldChunk, dst: &mut [u8]) {
+    use tensor_compressor::codec::{ChunkState, Planes};
+    let planes = Planes { hi: &c.hi, bits: &c.bits, lo: &c.lo };
+    let exp = std::array::from_fn(|w| c.exp[w].as_slice());
+    let sm = std::array::from_fn(|w| c.sm[w].as_slice());
+    let esc = std::array::from_fn(|w| c.esc[w].as_slice());
+    let mut st = ChunkState::new(fmt, t.mode, c.elems, exp, sm, esc, planes).unwrap();
+    let first = if tensor_compressor::avx512::available() { tensor_compressor::avx512::decode_chunk(t, &mut st, dst) } else { 0 };
+    st.decode_scalar(t, dst, first);
+    st.finish().unwrap();
+}
+
+fn decode(tiers: &[&'static dyn Operations]) {
+    use general_backend::codebook::{Codebook, SmMode};
+    use general_backend::decode::{ChunkRef, DecTables};
+    use tensor_compressor::codec::{ChunkStreams, Codebook as OldCodebook, DecTables as OldDec, EncTables as OldTables, SmMode as OldMode};
+    const CHUNK: usize = 1 << 20;
+    println!("| sample | mode | old GB/s | {} | equal |", tiers.iter().map(|t| format!("{} GB/s", t.tier_name())).collect::<Vec<_>>().join(" | "));
+    println!("|---|---|---|{}---|", "---|".repeat(tiers.len()));
+    for p in load_profiles() {
+        for d in &p.dtypes {
+            let Some((fmt, ofmt)) = format_of(&d.dtype) else { continue };
+            let sample = Sampler::new(d, test_seed(d.seed)).sample(test_bytes(256 << 20));
+            let n = sample.len() / fmt.width;
+            let low = fmt.low_bytes();
+            let (mut e, mut h, mut l) = (vec![0u8; n], vec![0u8; n], vec![0u8; n * low]);
+            old_split(ofmt, &sample, &mut e, &mut h, &mut l);
+            for (mode, omode) in [(SmMode::Raw, OldMode::Raw), (SmMode::Coded, OldMode::Coded)] {
+                if mode == SmMode::Coded && fmt.hi_bits() != 8 {
+                    continue;
+                }
+                let ocb = OldCodebook::build(&e, &h, omode).unwrap();
+                let old_enc = OldTables::new(&ocb);
+                let old_dec = OldDec::new(&ocb).unwrap();
+                let mut joint = vec![0u64; 65536];
+                for (&x, &y) in e.iter().zip(&h) {
+                    joint[(x as usize) << 8 | y as usize] += 1;
+                }
+                let cb = Codebook::build(joint.as_slice().try_into().unwrap(), mode).unwrap();
+                let dec = Box::new(DecTables::new(&cb).unwrap());
+                let mut chunks = Vec::new();
+                let mut cs = ChunkStreams::default();
+                for start in (0..n).step_by(CHUNK) {
+                    let end = (start + CHUNK).min(n);
+                    tensor_compressor::codec::encode_chunk(&old_enc, &e[start..end], &h[start..end], &mut cs);
+                    let (hi, bits) = match (mode, fmt.hi_bits()) {
+                        (SmMode::Coded, _) => (Vec::new(), Vec::new()),
+                        (_, 8) => (h[start..end].to_vec(), Vec::new()),
+                        (_, b) => {
+                            let mut bits = Vec::new();
+                            old_bitplanes(&h[start..end], b, &mut bits);
+                            (Vec::new(), bits)
+                        }
+                    };
+                    chunks.push(OldChunk {
+                        elems: end - start,
+                        exp: std::array::from_fn(|w| words(&cs.exp[w])),
+                        sm: std::array::from_fn(|w| words(&cs.sm[w])),
+                        esc: cs.esc.clone(),
+                        hi,
+                        bits,
+                        lo: l[start * low..end * low].to_vec(),
+                    });
+                }
+                let mut out = vec![0u8; sample.len()];
+                let (_, t_old) = best(5, || {
+                    for (c, dst) in chunks.iter().zip(out.chunks_mut(CHUNK * fmt.width)) {
+                        old_decode(&old_dec, ofmt, c, dst);
+                    }
+                });
+                let mut equal = out == sample;
+                let mut cells = Vec::new();
+                for t in tiers {
+                    out.fill(0);
+                    let (_, secs) = best(5, || {
+                        for (c, dst) in chunks.iter().zip(out.chunks_mut(CHUNK * fmt.width)) {
+                            let chunk = ChunkRef {
+                                elems: c.elems,
+                                exp: std::array::from_fn(|w| c.exp[w].as_slice()),
+                                sm: std::array::from_fn(|w| c.sm[w].as_slice()),
+                                esc: std::array::from_fn(|w| c.esc[w].as_slice()),
+                                hi: &c.hi,
+                                bits: &c.bits,
+                                lo: &c.lo,
+                            };
+                            t.decode_chunk(&dec, fmt, chunk, dst).unwrap();
+                        }
+                    });
+                    equal &= out == sample;
+                    cells.push(gbps(sample.len(), secs));
+                }
+                println!("| {} {} | {mode:?} | {} | {} | {} |", p.source.file, d.dtype, gbps(sample.len(), t_old), cells.join(" | "), if equal { "yes" } else { "NO" });
+                assert!(equal, "decode mismatch on {} {} {mode:?}", p.source.file, d.dtype);
+            }
+        }
+    }
+}
+
 fn main() {
     let tiers = available();
     match std::env::args().nth(1).as_deref() {
@@ -248,6 +364,7 @@ fn main() {
         Some("split") => split(&tiers),
         Some("codebook") => codebook(&tiers),
         Some("encode") => encode(&tiers),
+        Some("decode") => decode(&tiers),
         other => panic!("unknown op {other:?}"),
     }
 }

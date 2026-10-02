@@ -70,6 +70,35 @@ A profile holds one pooled histogram per dtype per source, which is what samples
 
 Both tiers run the identical VPCLMULQDQ fold source. `-Ctarget-cpu=znver5` makes LLVM unroll the loop 4× and group the carry-less multiplies, which measures about 40 GB/s against about 51 GB/s with generic scheduling on the same 9800X3D (details in docs/codegen-parity.md). The tier keeps the brief's `-Ctarget-cpu=znver5` for now, because Zen 5 scheduling may help the decoder ops still to be ported. Agreed with the owner: decide after the decoder is ported, by measuring both tunings on the decode loop. LLVM's Zen 5 model (and `llvm-mca`) rates both schedules equal while the real chip does not, so the final call is validated on real hardware, including other Zen 5 and Intel hosts reached over SSH, not on the model. CRC is a small share of decode time either way, since it runs over compressed bytes only.
 
+Measured after the decoder port (64 MiB samples, best of three runs, single thread, 9800X3D), the same `amd64_9800x3d` source built with `-Ctarget-cpu=znver5` and with `-Ctarget-cpu=znver5 -Ztune-cpu=x86-64-v4`:
+
+| Op (GB/s) | znver5 tuning | x86-64-v4 tuning |
+| --- | --- | --- |
+| decode BF16 raw | 11.36 | 11.33 |
+| decode BF16 coded | 4.13 | 4.13 |
+| decode F32 raw | 18.37 | 18.51 |
+| decode F32 coded | 7.11 | 7.23 |
+| decode F16 raw | 9.09 | 9.02 |
+| decode F8_E4M3 raw | 4.56 | 4.53 |
+| decode F8_E5M2 raw | 4.93 | 4.91 |
+| crc32c | 41.35 | 50.92 |
+
+Decode is tuning-neutral within 2%, so Zen 5 scheduling buys nothing on the decoder, and the generic tuning recovers the crc32c loss. The tier flags are unchanged until the owner decides and the result is checked on real Zen 5 and Intel hosts.
+
 ## Histogram on v3, v4 and v4_icl is about 10% slower than the old scalar loop
 
 The joint histogram is the same scalar loop on every tier. On AVX tiers LLVM's SLP vectorizer computes four `exp << 8` indices in an xmm register and extracts them with `vpextrd`, which measures 4.3 to 4.4 G elements/s against 4.9 on `amd64_v2`, `portable` and `amd64_9800x3d` (single thread, 256 Mi elements), and 5 to 9% below the old project's loop on one thread. A word-at-a-time variant was slower on every tier (3.6 to 4.6). The loop is kept: the histogram is one pass per tensor before the rANS encode, which dominates encode time, so the end-to-end cost is around 1 to 2% on those tiers. Codebook bytes are identical to the old project in every case.
+
+## core::simd byte shuffles and gathers do not follow tier flags
+
+`Simd::swizzle_dyn` chooses its instruction with `cfg(target_feature)` inside `core`, which is prebuilt at the baseline, so on x86-64 it is a scalar byte loop on every tier (on AArch64 it is `tbl`). `Simd::gather_or_default` lowers to `llvm.masked.gather`, which LLVM scalarized into `vpextrq`/`vpinsrd` sequences for the v3, v4, v4_icl and znver5 builds. With both as the only decode path, every x86 tier decoded at 0.7 GB/s (BF16 raw).
+
+The decoder therefore has small hooks with portable defaults: `Kernels::shuffle_bytes` (overridden with `pshufb` on `amd64_v2` and `amd64_v3`), `exp_entries`, `sm_bases`, `sm_entries` (register alias tables and explicit `vpgatherdd` on the AVX-512 tiers), `refill` (`vpexpandd` on the AVX-512 tiers) and `escapes` (`vpexpandb` on the VBMI2 tiers).
+
+## amd64_v3 decodes without hardware gathers
+
+Explicit AVX2 `vpgatherdd` in the `amd64_v3` decode hooks measured 10 to 18% faster on Zen 5, but they are not used. The installed QEMU 8.2.2 (gate 3) decodes a VSIB index register of `ymm4` as "no index" (SIB index 100b), so every lane gathers the table base; a five-instruction reproducer passes natively and fails under `qemu-x86_64-static -cpu Haswell`. Register allocation decides when LLVM picks `ymm4`, so the gathers could not pass gate 3 reliably. Intel cores carrying the Gather Data Sampling microcode mitigation also run `vpgatherdd` far slower than Zen 5 does, so the gain was not expected to hold on Intel AVX2 hosts. Revisit with SDE or a fixed QEMU in the SDE sprint, measured on real Intel and AMD AVX2 hardware.
+
+## amd64_v4 decodes without VBMI
+
+The old decoder needed VBMI and VBMI2. `amd64_v4` (AVX-512 F/BW/CD/DQ/VL) widens the alias dividers to dwords and looks them up with `vpermd`/`vpermi2d`, reads the sign|mantissa context from `DecTables::ctx_nibbles` (eight 4-bit contexts per dword, one `vpermi2d` and a variable shift) instead of a gather, and patches escapes with the scalar default since they are rare. It decodes at the speed of the VBMI tiers on the 9800X3D.
