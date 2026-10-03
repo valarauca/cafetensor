@@ -14,13 +14,16 @@ secs="${1:-60}"
 shift || true
 targets=("$@")
 [ "${#targets[@]}" -gt 0 ] || mapfile -t targets < <(cargo fuzz list)
+# A prebuilt cargo-fuzz defaults to the triple it was built for (musl from cargo-binstall), which
+# the sanitizers cannot use, so build for rustc's host triple.
+host="$(rustc -vV | sed -n 's/^host: //p')"
 export CARGO_PROFILE_RELEASE_LTO=false
 export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-1}"
 for t in "${targets[@]}"; do
     mkdir -p "fuzz/corpus/$t"
     echo "fuzz: $t for ${secs}s"
     log="$(mktemp)"
-    if ! cargo fuzz run "$t" "fuzz/corpus/$t" -- -max_total_time="$secs" -rss_limit_mb=4096 -print_final_stats=1 >"$log" 2>&1; then
+    if ! cargo fuzz run --target "$host" "$t" "fuzz/corpus/$t" -- -max_total_time="$secs" -rss_limit_mb=4096 -print_final_stats=1 >"$log" 2>&1; then
         tail -n 60 "$log"
         echo "fuzz: $t FAILED"
         exit 1
